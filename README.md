@@ -1,6 +1,6 @@
 # Pingo
 
-Pingo 是一个仅支持 macOS 的 Electron 桌面宠物 MVP：可聊天、读取用户明确授权项目中的文本文件，并通过主进程安全执行只读工具。
+Pingo 是一个仅支持 macOS 的 Electron 桌面伴侣 MVP：拥有自己的性格，支持聊天和日常辅助，并逐步建立用户明确授权的长期记忆。项目文件等开发工具能力仅作为可选的低优先级辅助。
 
 ## 开发运行
 
@@ -10,6 +10,8 @@ cp .env.example .env
 # 在 .env 中填写 MODEL_API_KEY
 npm run dev
 ```
+
+架构现状、目标架构和助手功能优先级见：[架构对齐与功能优先级](docs/ARCHITECTURE_ALIGNMENT.md)。
 
 默认模型为 `deepseek-chat`。也可以在设置页修改兼容 Chat Completions 的接口地址和模型名。
 

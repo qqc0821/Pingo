@@ -135,11 +135,6 @@ export function hidePetWindow(): void {
   petWindow?.hide()
 }
 
-export function togglePetWindow(): void {
-  if (petWindow?.isVisible()) hidePetWindow()
-  else showPetWindow()
-}
-
 export function sendSettingsRequest(): void {
   petWindow?.webContents.send("pingo:settings-request")
 }
