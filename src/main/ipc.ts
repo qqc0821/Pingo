@@ -3,10 +3,7 @@ import { dialog } from "electron"
 import type { OpenDialogOptions } from "electron"
 import { realpathSync, statSync } from "node:fs"
 import { basename } from "node:path"
-import type { AppSettings, ChatMessageInput, UserPreferences } from "../shared/types.js"
-import { ModelClient } from "./ai/client.js"
-import { parseWeatherIntent, WeatherCapability } from "./capabilities/weather.js"
-import { executeTool, TOOL_DEFINITIONS } from "./tools/registry.js"
+import type { AppSettings, UserPreferences } from "../shared/types.js"
 import type { SettingsStore } from "./store.js"
 import {
   beginDrag,
@@ -16,9 +13,6 @@ import {
   setPetExpanded,
   setPetPreferences,
 } from "./window.js"
-
-const modelClient = new ModelClient()
-const weatherCapability = new WeatherCapability()
 
 export function registerIpcHandlers(settingsStore: SettingsStore): void {
   ipcMain.handle("pet:set-expanded", (_event, value: unknown) => {
@@ -47,40 +41,6 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
 
   ipcMain.on("pet:drag-end", () => {
     endDrag()
-  })
-
-  ipcMain.handle("chat:send", (event, value: unknown) => {
-    const messages = parseMessages(value)
-    if (!messages) throw new TypeError("chat messages are invalid")
-
-    const sender = event.sender
-    const weatherIntent = parseWeatherIntent(messages.at(-1)?.content ?? "")
-    if (weatherIntent) {
-      modelClient.cancel()
-      void weatherCapability.stream(
-        weatherIntent,
-        settingsStore.getPreferences().defaultLocation,
-        (streamEvent) => {
-          if (!sender.isDestroyed()) sender.send("pingo:chat-event", streamEvent)
-        },
-      )
-      return
-    }
-
-    weatherCapability.cancel()
-    void modelClient.stream(
-      messages,
-      (streamEvent) => {
-        if (!sender.isDestroyed()) sender.send("pingo:chat-event", streamEvent)
-      },
-      (name, args) => executeTool(settingsStore.getAuthorizedProjectPath(), name, args),
-      TOOL_DEFINITIONS,
-    )
-  })
-
-  ipcMain.on("chat:cancel", () => {
-    modelClient.cancel()
-    weatherCapability.cancel()
   })
 
   ipcMain.handle("project:get", () => getProjectInfo(settingsStore.getAuthorizedProjectPath()))
@@ -122,22 +82,6 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
 
 function isScreenCoordinate(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value)
-}
-
-function parseMessages(value: unknown): ChatMessageInput[] | null {
-  if (!Array.isArray(value) || value.length > 24) return null
-  if (!value.every(isChatMessageInput)) return null
-  return value
-}
-
-function isChatMessageInput(value: unknown): value is ChatMessageInput {
-  if (typeof value !== "object" || value === null) return false
-  const message = value as Partial<ChatMessageInput>
-  return (
-    (message.role === "user" || message.role === "assistant" || message.role === "system") &&
-    typeof message.content === "string" &&
-    message.content.length <= 20_000
-  )
 }
 
 function getProjectInfo(projectPath: string | undefined) {

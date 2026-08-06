@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { ChatStreamEvent, PingoAPI, WindowAppearance, WindowState } from "../shared/types.js"
+import type { PingoAPI, WindowAppearance, WindowState } from "../shared/types.js"
 
 const api: PingoAPI = {
   platform: process.platform,
@@ -13,11 +13,6 @@ const api: PingoAPI = {
     onWindowState: (listener) => subscribe("pingo:window-state", listener),
     onSettingsRequest: (listener) => subscribe("pingo:settings-request", listener),
     onAppearance: (listener) => subscribe("pingo:appearance", listener),
-  },
-  chat: {
-    send: (messages) => ipcRenderer.invoke("chat:send", messages),
-    cancel: () => ipcRenderer.send("chat:cancel"),
-    onEvent: (listener) => subscribe("pingo:chat-event", listener),
   },
   project: {
     get: () => ipcRenderer.invoke("project:get"),
@@ -37,10 +32,6 @@ function subscribe(
   listener: (state: WindowState) => void,
 ): () => void
 function subscribe(channel: "pingo:settings-request", listener: () => void): () => void
-function subscribe(
-  channel: "pingo:chat-event",
-  listener: (event: ChatStreamEvent) => void,
-): () => void
 function subscribe(
   channel: "pingo:appearance",
   listener: (appearance: WindowAppearance) => void,

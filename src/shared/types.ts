@@ -63,11 +63,6 @@ export interface PingoAPI {
     onSettingsRequest: (listener: () => void) => () => void
     onAppearance: (listener: (appearance: WindowAppearance) => void) => () => void
   }
-  chat: {
-    send: (messages: ChatMessageInput[]) => Promise<void>
-    cancel: () => void
-    onEvent: (listener: (event: ChatStreamEvent) => void) => () => void
-  }
   project: {
     get: () => Promise<ProjectInfo | null>
     choose: () => Promise<ProjectInfo | null>
