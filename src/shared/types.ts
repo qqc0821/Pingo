@@ -36,6 +36,7 @@ export interface ProjectInfo {
 export interface UserPreferences {
   modelBaseUrl: string
   modelName: string
+  defaultLocation: string
   petScale: number
   transparency: number
   launchAtLogin: boolean

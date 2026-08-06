@@ -5,6 +5,7 @@ import type { UserPreferences, WindowPosition } from "../shared/types.js"
 export const DEFAULT_PREFERENCES: UserPreferences = {
   modelBaseUrl: "https://api.deepseek.com/v1/chat/completions",
   modelName: "deepseek-chat",
+  defaultLocation: "",
   petScale: 1,
   transparency: 1,
   launchAtLogin: false,

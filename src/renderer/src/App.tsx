@@ -438,6 +438,19 @@ export function App(): ReactElement {
                       }
                     />
                   </label>
+                  <label>
+                    <span>默认城市</span>
+                    <input
+                      value={settingsDraft.defaultLocation}
+                      disabled={settingsBusy}
+                      placeholder="例如：上海"
+                      onChange={(event) =>
+                        setSettingsDraft((current) =>
+                          current ? { ...current, defaultLocation: event.target.value } : current,
+                        )
+                      }
+                    />
+                  </label>
                   <div className="settings-readonly">
                     <div>
                       <span>API Key</span>

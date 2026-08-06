@@ -5,6 +5,7 @@ import { realpathSync, statSync } from "node:fs"
 import { basename } from "node:path"
 import type { AppSettings, ChatMessageInput, UserPreferences } from "../shared/types.js"
 import { ModelClient } from "./ai/client.js"
+import { parseWeatherIntent, WeatherCapability } from "./capabilities/weather.js"
 import { executeTool, TOOL_DEFINITIONS } from "./tools/registry.js"
 import type { SettingsStore } from "./store.js"
 import {
@@ -17,6 +18,7 @@ import {
 } from "./window.js"
 
 const modelClient = new ModelClient()
+const weatherCapability = new WeatherCapability()
 
 export function registerIpcHandlers(settingsStore: SettingsStore): void {
   ipcMain.handle("pet:set-expanded", (_event, value: unknown) => {
@@ -52,6 +54,20 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     if (!messages) throw new TypeError("chat messages are invalid")
 
     const sender = event.sender
+    const weatherIntent = parseWeatherIntent(messages.at(-1)?.content ?? "")
+    if (weatherIntent) {
+      modelClient.cancel()
+      void weatherCapability.stream(
+        weatherIntent,
+        settingsStore.getPreferences().defaultLocation,
+        (streamEvent) => {
+          if (!sender.isDestroyed()) sender.send("pingo:chat-event", streamEvent)
+        },
+      )
+      return
+    }
+
+    weatherCapability.cancel()
     void modelClient.stream(
       messages,
       (streamEvent) => {
@@ -64,6 +80,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
 
   ipcMain.on("chat:cancel", () => {
     modelClient.cancel()
+    weatherCapability.cancel()
   })
 
   ipcMain.handle("project:get", () => getProjectInfo(settingsStore.getAuthorizedProjectPath()))
@@ -154,6 +171,9 @@ function parseUserPreferences(value: unknown): UserPreferences {
   ) {
     throw new TypeError("modelName is invalid")
   }
+  if (typeof candidate.defaultLocation !== "string" || candidate.defaultLocation.length > 100) {
+    throw new TypeError("defaultLocation is invalid")
+  }
   if (!isNumberInRange(candidate.petScale, 0.7, 1.4)) throw new TypeError("petScale is invalid")
   if (!isNumberInRange(candidate.transparency, 0.5, 1))
     throw new TypeError("transparency is invalid")
@@ -161,6 +181,7 @@ function parseUserPreferences(value: unknown): UserPreferences {
   return {
     modelBaseUrl: candidate.modelBaseUrl.trim(),
     modelName: candidate.modelName.trim(),
+    defaultLocation: candidate.defaultLocation.trim(),
     petScale: candidate.petScale,
     transparency: candidate.transparency,
     launchAtLogin: candidate.launchAtLogin,
