@@ -1,6 +1,12 @@
 import { BrowserWindow, screen } from "electron"
 import { join } from "node:path"
-import type { WindowAppearance, WindowPosition, WindowState } from "../shared/types.js"
+import type {
+  PetState,
+  PetStateEvent,
+  WindowAppearance,
+  WindowPosition,
+  WindowState,
+} from "../shared/types.js"
 import type { SettingsStore } from "./store.js"
 
 export const COLLAPSED_SIZE = { width: 132, height: 132 }
@@ -137,6 +143,12 @@ export function hidePetWindow(): void {
 
 export function sendSettingsRequest(): void {
   petWindow?.webContents.send("pingo:settings-request")
+}
+
+export function sendPetState(state: PetState, durationMs?: number): void {
+  if (!petWindow) return
+  const event: PetStateEvent = durationMs === undefined ? { state } : { state, durationMs }
+  petWindow.webContents.send("pingo:pet-state", event)
 }
 
 export function setPetPreferences(scale: number, opacity: number): void {

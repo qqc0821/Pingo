@@ -1,40 +1,40 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { CSSProperties, MouseEvent, PointerEvent, ReactElement } from "react"
+import petGentleImage from "../../assets/pet-gentle.png"
 import petImage from "../../assets/pet.png"
 import petHappyImage from "../../assets/pet-happy.png"
-import type { AppSettings, UserPreferences } from "../../shared/types.js"
+import petThinkingImage from "../../assets/pet-thinking.png"
+import type { AppSettings, PetState, UserPreferences } from "../../shared/types.js"
 
 type IconName = "check" | "close" | "info" | "settings"
-type PetInteractionState = "idle" | "happy"
+type PetImageKey = "idle" | "happy" | "thinking" | "gentle"
 
 interface PetStateConfig {
-  image: string
+  image: PetImageKey
   label: string
-  ariaLabel: string
-  className: string
-  imageClassName: string
 }
 
-const PET_STATE_CONFIG: Record<PetInteractionState, PetStateConfig> = {
-  idle: {
-    image: petImage,
-    label: "待机中",
-    ariaLabel: "Pingo 桌面宠物，当前待机",
-    className: "pet-state-idle",
-    imageClassName: "pet-face--idle",
-  },
-  happy: {
-    image: petHappyImage,
-    label: "开心",
-    ariaLabel: "Pingo 桌面宠物，当前开心",
-    className: "pet-state-happy",
-    imageClassName: "pet-face--happy",
-  },
+const PET_IMAGES: Record<PetImageKey, string> = {
+  idle: petImage,
+  happy: petHappyImage,
+  thinking: petThinkingImage,
+  gentle: petGentleImage,
 }
 
-const PET_STATE_ENTRIES = Object.entries(PET_STATE_CONFIG) as Array<
-  [PetInteractionState, PetStateConfig]
->
+const PET_IMAGE_ENTRIES = Object.entries(PET_IMAGES) as Array<[PetImageKey, string]>
+
+const PET_STATE_CONFIG: Record<PetState, PetStateConfig> = {
+  idle: { image: "idle", label: "待机中" },
+  happy: { image: "happy", label: "开心" },
+  thinking: { image: "thinking", label: "思考中" },
+  nod: { image: "gentle", label: "点头" },
+  worried: { image: "thinking", label: "担心" },
+  encourage: { image: "happy", label: "鼓励" },
+  sleepy: { image: "gentle", label: "困倦" },
+  reminder: { image: "thinking", label: "提醒" },
+  focus: { image: "gentle", label: "专注陪伴" },
+  celebrate: { image: "happy", label: "完成庆祝" },
+}
 
 const HAPPY_STATE_DURATION_MS = 1800
 const POINTER_TAP_THRESHOLD_PX = 4
@@ -67,40 +67,53 @@ export function App(): ReactElement {
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [settingsNotice, setSettingsNotice] = useState("")
   const [appearanceScale, setAppearanceScale] = useState(1)
-  const [petState, setPetState] = useState<PetInteractionState>("idle")
+  const [petState, setPetState] = useState<PetState>("idle")
+  const [petStateRevision, setPetStateRevision] = useState(0)
   const dragStart = useRef<{ x: number; y: number; pointerId: number; didDrag: boolean } | null>(
     null,
   )
-  const happyStateTimer = useRef<number | null>(null)
+  const petStateTimer = useRef<number | null>(null)
 
   const currentPetState = PET_STATE_CONFIG[petState]
 
   useEffect(() => {
-    const happyImage = new window.Image()
-    happyImage.decoding = "async"
-    happyImage.src = petHappyImage
+    for (const imageSource of new Set(Object.values(PET_IMAGES))) {
+      const image = new window.Image()
+      image.decoding = "async"
+      image.src = imageSource
+    }
   }, [])
 
   useEffect(() => {
     return () => {
-      if (happyStateTimer.current !== null) {
-        window.clearTimeout(happyStateTimer.current)
-        happyStateTimer.current = null
+      if (petStateTimer.current !== null) {
+        window.clearTimeout(petStateTimer.current)
+        petStateTimer.current = null
       }
     }
   }, [])
 
-  const triggerHappyState = useCallback(() => {
-    if (happyStateTimer.current !== null) {
-      window.clearTimeout(happyStateTimer.current)
+  const showPetState = useCallback((nextState: PetState, durationMs?: number) => {
+    if (petStateTimer.current !== null) {
+      window.clearTimeout(petStateTimer.current)
+      petStateTimer.current = null
     }
 
-    setPetState("happy")
-    happyStateTimer.current = window.setTimeout(() => {
-      setPetState("idle")
-      happyStateTimer.current = null
-    }, HAPPY_STATE_DURATION_MS)
+    setPetState(nextState)
+    setPetStateRevision((current) => current + 1)
+
+    if (durationMs !== undefined && durationMs > 0 && nextState !== "idle") {
+      petStateTimer.current = window.setTimeout(() => {
+        setPetState("idle")
+        setPetStateRevision((current) => current + 1)
+        petStateTimer.current = null
+      }, durationMs)
+    }
   }, [])
+
+  const triggerHappyState = useCallback(() => {
+    showPetState("happy", HAPPY_STATE_DURATION_MS)
+  }, [showPetState])
 
   const openSettings = useCallback(async () => {
     setExpanded(true)
@@ -135,12 +148,16 @@ export function App(): ReactElement {
     const removeAppearanceListener = window.pingo.pet.onAppearance((appearance) => {
       setAppearanceScale(appearance.scale)
     })
+    const removePetStateListener = window.pingo.pet.onStateChange((event) => {
+      showPetState(event.state, event.durationMs)
+    })
     return () => {
       removeWindowStateListener()
       removeSettingsListener()
       removeAppearanceListener()
+      removePetStateListener()
     }
-  }, [openSettings])
+  }, [openSettings, showPetState])
 
   const handlePointerDown = useCallback((event: PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return
@@ -369,22 +386,28 @@ export function App(): ReactElement {
 
       <div className="pet-dock">
         <button
-          className={`pet-button ${currentPetState.className}`}
+          className={`pet-button pet-state-${petState}`}
           type="button"
-          aria-label={currentPetState.ariaLabel}
+          aria-label={`Pingo 桌面宠物，当前${currentPetState.label}`}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
           onContextMenu={handleContextMenu}
         >
-          <span className="pet-visual" aria-hidden="true">
+          <span
+            key={`${petState}-${petStateRevision}`}
+            className={`pet-visual pet-motion--${petState}`}
+            aria-hidden="true"
+          >
             <span className="pet-face-slot">
-              {PET_STATE_ENTRIES.map(([state, config]) => (
+              {PET_IMAGE_ENTRIES.map(([imageKey, imageSource]) => (
                 <img
-                  key={state}
-                  className={`pet-face ${config.imageClassName}`}
-                  src={config.image}
+                  key={imageKey}
+                  className={`pet-face pet-face--${imageKey} ${
+                    currentPetState.image === imageKey ? "pet-face--active" : ""
+                  }`}
+                  src={imageSource}
                   alt=""
                   draggable={false}
                   decoding="async"

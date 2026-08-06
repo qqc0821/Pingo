@@ -1,4 +1,19 @@
-export type PetState = "idle" | "thinking" | "success" | "error"
+export type PetState =
+  | "idle"
+  | "happy"
+  | "thinking"
+  | "nod"
+  | "worried"
+  | "encourage"
+  | "sleepy"
+  | "reminder"
+  | "focus"
+  | "celebrate"
+
+export interface PetStateEvent {
+  state: PetState
+  durationMs?: number
+}
 export type ChatMessageRole = "user" | "assistant" | "system"
 
 export interface ChatMessageInput {
@@ -62,6 +77,7 @@ export interface PingoAPI {
     onWindowState: (listener: (state: WindowState) => void) => () => void
     onSettingsRequest: (listener: () => void) => () => void
     onAppearance: (listener: (appearance: WindowAppearance) => void) => () => void
+    onStateChange: (listener: (event: PetStateEvent) => void) => () => void
   }
   project: {
     get: () => Promise<ProjectInfo | null>
