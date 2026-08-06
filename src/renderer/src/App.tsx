@@ -1,9 +1,43 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { CSSProperties, MouseEvent, PointerEvent, ReactElement } from "react"
 import petImage from "../../assets/pet.png"
+import petHappyImage from "../../assets/pet-happy.png"
 import type { AppSettings, UserPreferences } from "../../shared/types.js"
 
 type IconName = "check" | "close" | "info" | "settings"
+type PetInteractionState = "idle" | "happy"
+
+interface PetStateConfig {
+  image: string
+  label: string
+  ariaLabel: string
+  className: string
+  imageClassName: string
+}
+
+const PET_STATE_CONFIG: Record<PetInteractionState, PetStateConfig> = {
+  idle: {
+    image: petImage,
+    label: "待机中",
+    ariaLabel: "Pingo 桌面宠物，当前待机",
+    className: "pet-state-idle",
+    imageClassName: "pet-face--idle",
+  },
+  happy: {
+    image: petHappyImage,
+    label: "开心",
+    ariaLabel: "Pingo 桌面宠物，当前开心",
+    className: "pet-state-happy",
+    imageClassName: "pet-face--happy",
+  },
+}
+
+const PET_STATE_ENTRIES = Object.entries(PET_STATE_CONFIG) as Array<
+  [PetInteractionState, PetStateConfig]
+>
+
+const HAPPY_STATE_DURATION_MS = 1800
+const POINTER_TAP_THRESHOLD_PX = 4
 
 const ICON_PATHS: Record<IconName, readonly string[]> = {
   check: ["m5 12 4 4L19 6"],
@@ -33,7 +67,40 @@ export function App(): ReactElement {
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [settingsNotice, setSettingsNotice] = useState("")
   const [appearanceScale, setAppearanceScale] = useState(1)
-  const dragStart = useRef<{ x: number; y: number } | null>(null)
+  const [petState, setPetState] = useState<PetInteractionState>("idle")
+  const dragStart = useRef<{ x: number; y: number; pointerId: number; didDrag: boolean } | null>(
+    null,
+  )
+  const happyStateTimer = useRef<number | null>(null)
+
+  const currentPetState = PET_STATE_CONFIG[petState]
+
+  useEffect(() => {
+    const happyImage = new window.Image()
+    happyImage.decoding = "async"
+    happyImage.src = petHappyImage
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (happyStateTimer.current !== null) {
+        window.clearTimeout(happyStateTimer.current)
+        happyStateTimer.current = null
+      }
+    }
+  }, [])
+
+  const triggerHappyState = useCallback(() => {
+    if (happyStateTimer.current !== null) {
+      window.clearTimeout(happyStateTimer.current)
+    }
+
+    setPetState("happy")
+    happyStateTimer.current = window.setTimeout(() => {
+      setPetState("idle")
+      happyStateTimer.current = null
+    }, HAPPY_STATE_DURATION_MS)
+  }, [])
 
   const openSettings = useCallback(async () => {
     setExpanded(true)
@@ -78,17 +145,49 @@ export function App(): ReactElement {
   const handlePointerDown = useCallback((event: PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return
     event.currentTarget.setPointerCapture(event.pointerId)
-    dragStart.current = { x: event.screenX, y: event.screenY }
+    dragStart.current = {
+      x: event.screenX,
+      y: event.screenY,
+      pointerId: event.pointerId,
+      didDrag: false,
+    }
     window.pingo.pet.dragStart(event.screenX, event.screenY)
   }, [])
 
   const handlePointerMove = useCallback((event: PointerEvent<HTMLButtonElement>) => {
-    if (!dragStart.current) return
-    window.pingo.pet.dragMove(event.screenX, event.screenY)
+    const session = dragStart.current
+    if (!session || session.pointerId !== event.pointerId) return
+
+    const distance = Math.hypot(event.screenX - session.x, event.screenY - session.y)
+    if (distance > POINTER_TAP_THRESHOLD_PX) {
+      session.didDrag = true
+    }
+    if (session.didDrag) {
+      window.pingo.pet.dragMove(event.screenX, event.screenY)
+    }
   }, [])
 
-  const handlePointerUp = useCallback((event: PointerEvent<HTMLButtonElement>) => {
-    if (!dragStart.current) return
+  const handlePointerUp = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      const session = dragStart.current
+      if (!session || session.pointerId !== event.pointerId) return
+      dragStart.current = null
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      window.pingo.pet.dragEnd()
+
+      const distance = Math.hypot(event.screenX - session.x, event.screenY - session.y)
+      if (!session.didDrag && distance <= POINTER_TAP_THRESHOLD_PX) {
+        triggerHappyState()
+      }
+    },
+    [triggerHappyState],
+  )
+
+  const handlePointerCancel = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    const session = dragStart.current
+    if (!session || session.pointerId !== event.pointerId) return
     dragStart.current = null
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
@@ -270,18 +369,31 @@ export function App(): ReactElement {
 
       <div className="pet-dock">
         <button
-          className="pet-button"
+          className={`pet-button ${currentPetState.className}`}
           type="button"
-          aria-label="Pingo 桌面宠物"
+          aria-label={currentPetState.ariaLabel}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
           onContextMenu={handleContextMenu}
         >
-          <img className="pet-face" src={petImage} alt="" aria-hidden="true" draggable={false} />
+          <span className="pet-visual" aria-hidden="true">
+            <span className="pet-face-slot">
+              {PET_STATE_ENTRIES.map(([state, config]) => (
+                <img
+                  key={state}
+                  className={`pet-face ${config.imageClassName}`}
+                  src={config.image}
+                  alt=""
+                  draggable={false}
+                  decoding="async"
+                />
+              ))}
+            </span>
+          </span>
           <span className="pet-state" aria-hidden="true">
-            待机中
+            {currentPetState.label}
           </span>
         </button>
       </div>
