@@ -1,0 +1,16 @@
+node_modules/
+out/
+dist/
+.vite/
+.DS_Store
+.env
+*.log
+coverage/
+
+data/
+*.local.json
+
+
+findings.md
+progress.md
+task_plan.md
