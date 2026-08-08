@@ -55,6 +55,25 @@ button {
   box-shadow: 0 16px 40px rgb(15 23 42 / 12%);
 }
 
+.approval-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  padding: 14px;
+  border-radius: inherit;
+  background: rgb(255 255 255 / 97%);
+  scrollbar-gutter: stable;
+}
+
+.approval-layer .approval-card {
+  max-height: none;
+  margin-top: 0;
+}
+
 .task-header {
   display: flex;
   align-items: center;
@@ -853,6 +872,12 @@ button {
   position: absolute;
   right: 16px;
   bottom: 16px;
+  z-index: 10;
+}
+
+.app-shell.has-approval .pet-dock {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .app-shell.collapsed .pet-dock {

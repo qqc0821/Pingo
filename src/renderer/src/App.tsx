@@ -839,7 +839,7 @@ export function App(): ReactElement {
 
   return (
     <main
-      className={`app-shell ${expanded ? "expanded" : "collapsed"}`}
+      className={`app-shell ${expanded ? "expanded" : "collapsed"} ${approvalList.length > 0 ? "has-approval" : ""}`}
       style={{ "--pet-scale": appearanceScale } as CSSProperties}
     >
       {expanded && (
@@ -1085,159 +1085,167 @@ export function App(): ReactElement {
                   </div>
                 </div>
               )}
-              {approvalList.map((approval) => {
-                const terminalPlan = approval.plan.terminalPlan
-                const remainingMs = Math.max(0, approval.expiresAt - approvalNow)
-                const remainingSeconds = Math.ceil(remainingMs / 1_000)
-                const expired = remainingMs === 0
-                return (
-                  <div
-                    key={approval.operationId}
-                    className="action-card approval-card"
-                    role="dialog"
-                    aria-label={`操作确认 ${approval.operationId}`}
-                  >
-                    <strong>
-                      {approval.plan.risk} ·{" "}
-                      {terminalPlan ? "Terminal operation" : approval.plan.kind}
-                    </strong>
-                    <p className="risk-reason">{approval.plan.riskReason}</p>
-                    {terminalPlan ? (
-                      <>
-                        <div className="approval-command">
-                          <span>真实命令</span>
-                          <code>
-                            {formatDisplayCommand(
-                              terminalPlan.executable.displayName,
-                              terminalPlan.argv,
+              {approvalList.length > 0 && (
+                <div className="approval-layer" aria-label="待确认操作">
+                  {approvalList.map((approval) => {
+                    const terminalPlan = approval.plan.terminalPlan
+                    const remainingMs = Math.max(0, approval.expiresAt - approvalNow)
+                    const remainingSeconds = Math.ceil(remainingMs / 1_000)
+                    const expired = remainingMs === 0
+                    return (
+                      <div
+                        key={approval.operationId}
+                        className="action-card approval-card"
+                        role="dialog"
+                        aria-label={`操作确认 ${approval.operationId}`}
+                      >
+                        <strong>
+                          {approval.plan.risk} ·{" "}
+                          {terminalPlan ? "Terminal operation" : approval.plan.kind}
+                        </strong>
+                        <p className="risk-reason">{approval.plan.riskReason}</p>
+                        {terminalPlan ? (
+                          <>
+                            <div className="approval-command">
+                              <span>真实命令</span>
+                              <code>
+                                {formatDisplayCommand(
+                                  terminalPlan.executable.displayName,
+                                  terminalPlan.argv,
+                                )}
+                              </code>
+                            </div>
+                            <div className="approval-facts">
+                              <span>工作目录：{terminalPlan.cwd.relativePath || "."}</span>
+                              <span>
+                                代码执行：{terminalPlan.effects.projectCodeExecution ? "是" : "否"}
+                              </span>
+                              <span>文件范围：workspace {terminalPlan.effects.workspace}</span>
+                              <span>沙箱档位：{terminalPlan.sandbox.tier}</span>
+                              <span>网络：关闭（公网、localhost、私网、Unix socket）</span>
+                              <span>HOME/密钥/目录外：不可用</span>
+                              <span>
+                                限制：{terminalPlan.limits.timeoutMs / 1_000}s · 输出{" "}
+                                {terminalPlan.limits.outputBytes} bytes · 可撤销：否
+                              </span>
+                            </div>
+                            {terminalPlan.projectScript && (
+                              <div className="approval-script">
+                                <span>
+                                  脚本：{terminalPlan.projectScript.name} · 来源：
+                                  {terminalPlan.projectScript.packageJsonRelativePath}
+                                </span>
+                                <code>{terminalPlan.projectScript.body}</code>
+                                <small>
+                                  package.json SHA-256：
+                                  {terminalPlan.projectScript.packageJsonSha256}
+                                </small>
+                              </div>
                             )}
-                          </code>
-                        </div>
-                        <div className="approval-facts">
-                          <span>工作目录：{terminalPlan.cwd.relativePath || "."}</span>
-                          <span>
-                            代码执行：{terminalPlan.effects.projectCodeExecution ? "是" : "否"}
-                          </span>
-                          <span>文件范围：workspace {terminalPlan.effects.workspace}</span>
-                          <span>沙箱档位：{terminalPlan.sandbox.tier}</span>
-                          <span>网络：关闭（公网、localhost、私网、Unix socket）</span>
-                          <span>HOME/密钥/目录外：不可用</span>
-                          <span>
-                            限制：{terminalPlan.limits.timeoutMs / 1_000}s · 输出{" "}
-                            {terminalPlan.limits.outputBytes} bytes · 可撤销：否
-                          </span>
-                        </div>
-                        {terminalPlan.projectScript && (
-                          <div className="approval-script">
+                          </>
+                        ) : (
+                          <pre>{approval.plan.preview}</pre>
+                        )}
+                        <p>
+                          一次性 token · 计划摘要{" "}
+                          {(terminalPlan?.planDigest ?? approval.plan.digest).slice(0, 12)}… ·{" "}
+                          {expired ? "已过期，请重新规划" : `${remainingSeconds}s 后过期`}
+                        </p>
+                        {approval.display && (
+                          <div className="approval-impact">
                             <span>
-                              脚本：{terminalPlan.projectScript.name} · 来源：
-                              {terminalPlan.projectScript.packageJsonRelativePath}
+                              人类指纹：{approval.display.fingerprint.words.join(" · ")} · 沙箱：
+                              {approval.display.riskBadge.label}
                             </span>
-                            <code>{terminalPlan.projectScript.body}</code>
-                            <small>
-                              package.json SHA-256：{terminalPlan.projectScript.packageJsonSha256}
-                            </small>
+                            <span>
+                              读取范围：项目目录与系统运行库（
+                              {approval.display.pathPreview.readRoots.length} 项）
+                            </span>
+                            <span>
+                              写入范围：
+                              {approval.display.pathPreview.writeRoots.length === 0
+                                ? "无"
+                                : terminalPlan?.effects.workspace === "write"
+                                  ? `项目目录与临时目录（${approval.display.pathPreview.writeRoots.length} 项）`
+                                  : `仅临时目录（${approval.display.pathPreview.writeRoots.length} 项）`}
+                            </span>
+                            <span>
+                              保护范围：敏感文件与凭据（
+                              {approval.display.pathPreview.protectedPaths.length} 项）
+                            </span>
+                            <details className="approval-path-details">
+                              <summary>查看完整路径范围</summary>
+                              <div className="approval-path-list">
+                                <strong>读取根</strong>
+                                <code>
+                                  {approval.display.pathPreview.readRoots.join("\n") || "无"}
+                                </code>
+                                <strong>写入根</strong>
+                                <code>
+                                  {approval.display.pathPreview.writeRoots.join("\n") || "无"}
+                                </code>
+                                <strong>保护路径</strong>
+                                <code>
+                                  {approval.display.pathPreview.protectedPaths.join("\n") || "无"}
+                                </code>
+                              </div>
+                            </details>
                           </div>
                         )}
-                      </>
-                    ) : (
-                      <pre>{approval.plan.preview}</pre>
-                    )}
-                    <p>
-                      一次性 token · 计划摘要{" "}
-                      {(terminalPlan?.planDigest ?? approval.plan.digest).slice(0, 12)}… ·{" "}
-                      {expired ? "已过期，请重新规划" : `${remainingSeconds}s 后过期`}
-                    </p>
-                    {approval.display && (
-                      <div className="approval-impact">
-                        <span>
-                          人类指纹：{approval.display.fingerprint.words.join(" · ")} · 沙箱：
-                          {approval.display.riskBadge.label}
-                        </span>
-                        <span>
-                          读取范围：项目目录与系统运行库（
-                          {approval.display.pathPreview.readRoots.length} 项）
-                        </span>
-                        <span>
-                          写入范围：
-                          {approval.display.pathPreview.writeRoots.length === 0
-                            ? "无"
-                            : terminalPlan?.effects.workspace === "write"
-                              ? `项目目录与临时目录（${approval.display.pathPreview.writeRoots.length} 项）`
-                              : `仅临时目录（${approval.display.pathPreview.writeRoots.length} 项）`}
-                        </span>
-                        <span>
-                          保护范围：敏感文件与凭据（
-                          {approval.display.pathPreview.protectedPaths.length} 项）
-                        </span>
-                        <details className="approval-path-details">
-                          <summary>查看完整路径范围</summary>
-                          <div className="approval-path-list">
-                            <strong>读取根</strong>
-                            <code>{approval.display.pathPreview.readRoots.join("\n") || "无"}</code>
-                            <strong>写入根</strong>
-                            <code>
-                              {approval.display.pathPreview.writeRoots.join("\n") || "无"}
-                            </code>
-                            <strong>保护路径</strong>
-                            <code>
-                              {approval.display.pathPreview.protectedPaths.join("\n") || "无"}
-                            </code>
-                          </div>
-                        </details>
+                        <label className="approval-reason">
+                          <span>拒绝理由（可选）</span>
+                          <input
+                            value={approvalReasons[approval.operationId] ?? ""}
+                            maxLength={240}
+                            placeholder="例如：范围太大，改为只检查一个文件"
+                            onChange={(event) =>
+                              setApprovalReasons((current) => ({
+                                ...current,
+                                [approval.operationId]: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <div className="action-buttons">
+                          <button
+                            type="button"
+                            disabled={expired}
+                            onClick={() => void decideApproval(approval, "approve")}
+                          >
+                            运行一次
+                          </button>
+                          <button
+                            type="button"
+                            className="button-secondary"
+                            disabled={expired}
+                            onClick={() => void decideApproval(approval, "deny")}
+                          >
+                            拒绝
+                          </button>
+                          {terminalPlan?.sandbox.tier === "read-only" &&
+                            terminalPlan.risk === "R1" && (
+                              <button
+                                type="button"
+                                className="button-secondary"
+                                disabled={expired}
+                                onClick={() => void decideApproval(approval, "trust")}
+                              >
+                                本会话允许同类
+                              </button>
+                            )}
+                          <button
+                            type="button"
+                            className="button-secondary"
+                            onClick={() => void copyApprovalCommand(approval)}
+                          >
+                            复制命令
+                          </button>
+                        </div>
                       </div>
-                    )}
-                    <label className="approval-reason">
-                      <span>拒绝理由（可选）</span>
-                      <input
-                        value={approvalReasons[approval.operationId] ?? ""}
-                        maxLength={240}
-                        placeholder="例如：范围太大，改为只检查一个文件"
-                        onChange={(event) =>
-                          setApprovalReasons((current) => ({
-                            ...current,
-                            [approval.operationId]: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                    <div className="action-buttons">
-                      <button
-                        type="button"
-                        disabled={expired}
-                        onClick={() => void decideApproval(approval, "approve")}
-                      >
-                        运行一次
-                      </button>
-                      <button
-                        type="button"
-                        className="button-secondary"
-                        disabled={expired}
-                        onClick={() => void decideApproval(approval, "deny")}
-                      >
-                        拒绝
-                      </button>
-                      {terminalPlan?.sandbox.tier === "read-only" && terminalPlan.risk === "R1" && (
-                        <button
-                          type="button"
-                          className="button-secondary"
-                          disabled={expired}
-                          onClick={() => void decideApproval(approval, "trust")}
-                        >
-                          本会话允许同类
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="button-secondary"
-                        onClick={() => void copyApprovalCommand(approval)}
-                      >
-                        复制命令
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
+                    )
+                  })}
+                </div>
+              )}
               {lastResult?.undoId && lastResult.status === "completed" && (
                 <div className="result-actions">
                   <span>这项文件操作可以撤销。</span>
