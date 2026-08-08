@@ -3,7 +3,7 @@ import { dialog } from "electron"
 import type { OpenDialogOptions } from "electron"
 import { realpathSync, statSync } from "node:fs"
 import { basename, join } from "node:path"
-import type { AppSettings, PetState, UserPreferences } from "../shared/types.js"
+import type { AppSettings, PetState, TrustedWorkspace, UserPreferences } from "../shared/types.js"
 import type {
   Capability,
   CapabilityRequest,
@@ -37,9 +37,10 @@ const PET_STATE_PREVIEWS: ReadonlyArray<{ label: string; state: PetState }> = [
 ]
 
 export function registerIpcHandlers(settingsStore: SettingsStore): void {
+  const auditLogger = new AuditLogger(join(app.getPath("userData"), "operation-history.jsonl"))
   const taskManager = new TaskManager({
     settingsStore,
-    auditLogger: new AuditLogger(join(app.getPath("userData"), "operation-history.jsonl")),
+    auditLogger,
   })
 
   app.on("browser-window-created", (_event, window) => {
@@ -95,20 +96,10 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
 
   ipcMain.handle("project:choose", async (event) => {
     assertTrustedSender(event.sender)
-    const options: OpenDialogOptions = {
-      title: "选择要授权给 Pingo 的项目目录",
-      properties: ["openDirectory", "createDirectory"],
-    }
-    const owner = getPetWindow()
-    const result = owner
-      ? await dialog.showOpenDialog(owner, options)
-      : await dialog.showOpenDialog(options)
-    const selectedPath = result.filePaths.at(0)
-    if (result.canceled || !selectedPath) return null
-
-    const realSelectedPath = realpathSync.native(selectedPath)
-    if (!statSync(realSelectedPath).isDirectory()) throw new Error("选择的路径不是目录")
+    const realSelectedPath = await chooseDirectory("选择要授权给 Pingo 的项目目录")
+    if (!realSelectedPath) return null
     taskManager.revokeAllCapabilities()
+    settingsStore.clearTrustedWorkspace()
     settingsStore.setAuthorizedProjectPath(realSelectedPath)
     return getProjectInfo(realSelectedPath)
   })
@@ -116,7 +107,60 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
   ipcMain.handle("project:revoke", (event) => {
     assertTrustedSender(event.sender)
     taskManager.revokeAllCapabilities()
+    settingsStore.clearTrustedWorkspace()
     settingsStore.clearAuthorizedProjectPath()
+  })
+
+  ipcMain.handle("trusted-workspace:get", (event): TrustedWorkspace | null => {
+    assertTrustedSender(event.sender)
+    return getTrustedWorkspaceInfo(settingsStore)
+  })
+
+  ipcMain.handle("trusted-workspace:choose", async (event): Promise<TrustedWorkspace | null> => {
+    assertTrustedSender(event.sender)
+    const selectedPath = await chooseDirectory("选择要持续授权给 Pingo 的目录")
+    if (!selectedPath) return null
+    taskManager.revokeAllCapabilities()
+    settingsStore.setTrustedWorkspace(selectedPath)
+    auditLogger.record({
+      taskId: "system",
+      kind: "trusted_workspace.enable",
+      targets: [selectedPath],
+      status: "enabled",
+    })
+    return getTrustedWorkspaceInfo(settingsStore)
+  })
+
+  ipcMain.handle("trusted-workspace:disable", (event): boolean => {
+    assertTrustedSender(event.sender)
+    const storedWorkspace = settingsStore.getTrustedWorkspace()
+    if (!storedWorkspace) return false
+    taskManager.revokeAllCapabilities()
+    settingsStore.clearTrustedWorkspace()
+    auditLogger.record({
+      taskId: "system",
+      kind: "trusted_workspace.disable",
+      targets: [storedWorkspace.path],
+      status: "disabled",
+    })
+    return true
+  })
+
+  ipcMain.handle("trusted-workspace:forget", (event): boolean => {
+    assertTrustedSender(event.sender)
+    const storedWorkspace = settingsStore.getTrustedWorkspace()
+    const storedProjectPath = settingsStore.getAuthorizedProjectPath()
+    if (!storedWorkspace && !storedProjectPath) return false
+    taskManager.revokeAllCapabilities()
+    settingsStore.clearTrustedWorkspace()
+    settingsStore.clearAuthorizedProjectPath()
+    auditLogger.record({
+      taskId: "system",
+      kind: "trusted_workspace.forget",
+      targets: [storedWorkspace?.path ?? storedProjectPath ?? ""],
+      status: "forgotten",
+    })
+    return true
   })
 
   ipcMain.handle("settings:get", (event): AppSettings => {
@@ -221,6 +265,22 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
   })
 }
 
+async function chooseDirectory(title: string): Promise<string | null> {
+  const options: OpenDialogOptions = {
+    title,
+    properties: ["openDirectory", "createDirectory"],
+  }
+  const owner = getPetWindow()
+  const result = owner
+    ? await dialog.showOpenDialog(owner, options)
+    : await dialog.showOpenDialog(options)
+  const selectedPath = result.filePaths.at(0)
+  if (result.canceled || !selectedPath) return null
+  const realSelectedPath = realpathSync.native(selectedPath)
+  if (!statSync(realSelectedPath).isDirectory()) throw new Error("选择的路径不是目录")
+  return realSelectedPath
+}
+
 function isScreenCoordinate(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value)
 }
@@ -316,6 +376,14 @@ function getProjectInfo(projectPath: string | undefined) {
   } catch {
     return null
   }
+}
+
+function getTrustedWorkspaceInfo(settingsStore: SettingsStore): TrustedWorkspace | null {
+  const trusted = settingsStore.getTrustedWorkspace()
+  if (!trusted) return null
+  const project = getProjectInfo(trusted.path)
+  if (!project) return null
+  return { ...trusted, path: project.path, name: project.name }
 }
 
 function getAppSettings(settingsStore: SettingsStore): AppSettings {

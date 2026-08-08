@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { isAbsolute, relative, sep } from "node:path"
 import type {
   ApprovalRequest,
   Capability,
@@ -21,6 +22,7 @@ import { validateCommand } from "../terminal/commandPolicy.js"
 import { TerminalRunner } from "../terminal/runner.js"
 import { executeTool, READ_ONLY_TOOL_NAMES, TOOL_DEFINITIONS } from "../tools/registry.js"
 import { planFileOperation, type PlannedFileOperation } from "../tools/fileOperations.js"
+import { getRealProjectRoot } from "../security/pathGuard.js"
 import type { SettingsStore } from "../store.js"
 import { UndoManager } from "./undoManager.js"
 
@@ -40,6 +42,11 @@ interface TaskRecord {
   state: TaskState
   cancelled: boolean
   permission?: PermissionWaiter
+}
+
+interface CapabilityAccess {
+  grant?: CapabilityGrant
+  trustedWorkspace: boolean
 }
 
 export interface TaskManagerDependencies {
@@ -152,13 +159,18 @@ export class TaskManager {
       expiresAt: now + 30_000,
       reversible: false,
     }
-    return this.confirmAndExecute(task, plan, async () => {
-      this.capabilityManager.assertAllowed(
-        classification.capability,
-        action.targets,
-        sourceWindowId,
-      )
-      this.capabilityManager.consume(grant.grantId)
+    const execute = async (): Promise<OperationResult> => {
+      if (grant.trustedWorkspace) {
+        this.assertTrustedWorkspaceTargets(action.targets)
+      } else {
+        if (!grant.grant) throw new Error("撤销授权已失效")
+        this.capabilityManager.assertAllowed(
+          classification.capability,
+          action.targets,
+          sourceWindowId,
+        )
+        this.capabilityManager.consume(grant.grant.grantId)
+      }
       await action.run()
       this.undoManager.remove(undoId)
       return {
@@ -168,7 +180,10 @@ export class TaskManager {
         detail: "撤销完成",
         reversible: false,
       }
-    })
+    }
+    return grant.trustedWorkspace
+      ? this.executeTrustedOperation(task, plan, execute)
+      : this.confirmAndExecute(task, plan, execute)
   }
 
   grantCapability(
@@ -185,9 +200,14 @@ export class TaskManager {
     }
     if (
       capabilities.length === 0 ||
-      capabilities.some((capability) => capability === "system.automation")
+      capabilities.some((capability) => capability === "system.automation") ||
+      duration === "persistent"
     ) {
-      throw new Error("申请了当前版本不允许的能力")
+      throw new Error(
+        duration === "persistent"
+          ? "持续目录授权必须通过首次启动或设置页创建"
+          : "申请了当前版本不允许的能力",
+      )
     }
     if (!capabilities.every((capability) => task.permission?.capabilities.includes(capability))) {
       throw new Error("授权能力与当前任务申请不一致")
@@ -284,7 +304,7 @@ export class TaskManager {
       const grant = await this.waitForCapability(task, "workspace.read")
       if (!grant) return deniedExecution("workspace.read")
       const projectPath = this.requireProjectPath()
-      this.capabilityManager.consume(grant.grantId)
+      if (grant.grant) this.capabilityManager.consume(grant.grant.grantId)
       const execution = await executeTool(projectPath, name, args)
       return execution
     }
@@ -315,11 +335,22 @@ export class TaskManager {
     } catch (error) {
       return { content: `操作未创建：${safeError(error)}`, detail: "文件操作预览失败" }
     }
-    const result = await this.confirmAndExecute(task, operation.plan, async () => {
-      this.capabilityManager.assertAllowed("workspace.write", [projectPath], task.sourceWindowId)
-      this.capabilityManager.consume(grant.grantId)
+    const execute = async () => {
+      if (grant.trustedWorkspace) {
+        this.assertTrustedWorkspaceTargets(operation.plan.targets)
+      } else {
+        this.capabilityManager.assertAllowed(
+          "workspace.write",
+          operation.plan.targets,
+          task.sourceWindowId,
+        )
+        if (grant.grant) this.capabilityManager.consume(grant.grant.grantId)
+      }
       return operation.execute({ isCancelled: () => task.cancelled })
-    })
+    }
+    const result = grant.trustedWorkspace
+      ? await this.executeTrustedOperation(task, operation.plan, execute)
+      : await this.confirmAndExecute(task, operation.plan, execute)
     if (result.status === "completed" && result.undoId && operation.undo) {
       this.undoManager.register({
         undoId: result.undoId,
@@ -339,7 +370,8 @@ export class TaskManager {
     args: unknown,
   ): Promise<{ content: string; detail: string }> {
     const grant = await this.waitForCapability(task, "terminal.execute")
-    if (!grant) return deniedExecution("terminal.execute")
+    if (!grant || !grant.grant) return deniedExecution("terminal.execute")
+    const sessionGrant = grant.grant
     const projectPath = this.requireProjectPath()
     let parsed
     try {
@@ -376,12 +408,12 @@ export class TaskManager {
       reversible: false,
     }
     const result = await this.confirmAndExecute(task, plan, async () => {
-      this.capabilityManager.assertAllowed("terminal.execute", [projectPath], task.sourceWindowId)
+      this.capabilityManager.assertAllowed("terminal.execute", plan.targets, task.sourceWindowId)
       const current = validateCommand(projectPath, args).plan
       if (JSON.stringify(current) !== JSON.stringify(plan.command)) {
         throw new Error("确认后命令或 cwd 已变化")
       }
-      this.capabilityManager.consume(grant.grantId)
+      this.capabilityManager.consume(sessionGrant.grantId)
       const run = await this.terminalRunner.run(current, { signal: task.controller.signal })
       const status = run.exitCode === 0 && !run.timedOut && !run.truncated ? "completed" : "failed"
       return {
@@ -476,14 +508,65 @@ export class TaskManager {
     }
   }
 
+  private async executeTrustedOperation(
+    task: TaskRecord,
+    plan: OperationPlan,
+    execute: () => Promise<OperationResult>,
+  ): Promise<OperationResult> {
+    this.emitState(task, "executing")
+    try {
+      const result = await execute()
+      task.emit({ type: "operation-result", result })
+      this.dependencies.auditLogger.record({
+        taskId: task.taskId,
+        operationId: plan.operationId,
+        kind: plan.kind,
+        risk: plan.risk,
+        targets: plan.targets,
+        status: result.status,
+        detail: `trusted_workspace: ${result.detail}`,
+      })
+      return result
+    } catch (error) {
+      const result: OperationResult = {
+        operationId: plan.operationId,
+        status: task.cancelled ? "cancelled" : "failed",
+        content: `操作未执行：${safeError(error)}`,
+        detail: safeError(error),
+        reversible: plan.reversible,
+      }
+      task.emit({ type: "operation-result", result })
+      this.dependencies.auditLogger.record({
+        taskId: task.taskId,
+        operationId: plan.operationId,
+        kind: plan.kind,
+        risk: plan.risk,
+        targets: plan.targets,
+        status: result.status,
+        detail: `trusted_workspace: ${result.detail}`,
+      })
+      return result
+    }
+  }
+
   private async waitForCapability(
     task: TaskRecord,
     capability: Capability,
-  ): Promise<CapabilityGrant | null> {
+  ): Promise<CapabilityAccess | null> {
     const projectPath = this.dependencies.settingsStore.getAuthorizedProjectPath()
+    if (projectPath && capability !== "terminal.execute" && this.isTrustedWorkspace(projectPath)) {
+      return { trustedWorkspace: true }
+    }
     if (projectPath) {
       try {
-        return this.capabilityManager.assertAllowed(capability, [projectPath], task.sourceWindowId)
+        return {
+          grant: this.capabilityManager.assertAllowed(
+            capability,
+            [projectPath],
+            task.sourceWindowId,
+          ),
+          trustedWorkspace: false,
+        }
       } catch {
         // Fall through to the explicit permission request.
       }
@@ -502,11 +585,14 @@ export class TaskManager {
     const nextProjectPath = this.dependencies.settingsStore.getAuthorizedProjectPath()
     if (!nextProjectPath) return null
     try {
-      return this.capabilityManager.assertAllowed(
-        capability,
-        [nextProjectPath],
-        task.sourceWindowId,
-      )
+      return {
+        grant: this.capabilityManager.assertAllowed(
+          capability,
+          [nextProjectPath],
+          task.sourceWindowId,
+        ),
+        trustedWorkspace: false,
+      }
     } catch {
       return null
     }
@@ -516,6 +602,25 @@ export class TaskManager {
     const projectPath = this.dependencies.settingsStore.getAuthorizedProjectPath()
     if (!projectPath) throw new Error("尚未选择授权目录")
     return projectPath
+  }
+
+  private isTrustedWorkspace(projectPath: string): boolean {
+    const trusted = this.dependencies.settingsStore.getTrustedWorkspace()
+    if (!trusted) return false
+    try {
+      return getRealProjectRoot(trusted.path) === getRealProjectRoot(projectPath)
+    } catch {
+      return false
+    }
+  }
+
+  private assertTrustedWorkspaceTargets(targets: string[]): void {
+    const trusted = this.dependencies.settingsStore.getTrustedWorkspace()
+    if (!trusted) throw new Error("持续目录授权已关闭")
+    const root = getRealProjectRoot(trusted.path)
+    if (!targets.every((target) => isWithinRoot(root, target))) {
+      throw new Error("操作目标越过持续授权目录")
+    }
   }
 
   private emitState(task: TaskRecord, state: TaskState): void {
@@ -547,6 +652,17 @@ function isFileOperation(name: string): name is Exclude<OperationKind, "terminal
 
 function isTerminal(state: TaskState): boolean {
   return state === "completed" || state === "failed" || state === "cancelled"
+}
+
+function isWithinRoot(root: string, target: string): boolean {
+  if (!isAbsolute(target)) return false
+  const relativeTarget = relative(root, target)
+  return (
+    relativeTarget === "" ||
+    (!relativeTarget.startsWith(`..${sep}`) &&
+      relativeTarget !== ".." &&
+      !isAbsolute(relativeTarget))
+  )
 }
 
 function formatCommandPreview(command: NonNullable<OperationPlan["command"]>): string {

@@ -58,6 +58,12 @@ export interface CapabilityGrant {
   sessionId: string
 }
 
+export interface TrustedWorkspace {
+  path: string
+  name: string
+  authorizedAt: number
+}
+
 export interface FileStatePrecondition {
   path: string
   exists: boolean
@@ -134,7 +140,14 @@ export interface AuditRecord {
   auditId: string
   taskId: string
   operationId?: string
-  kind: OperationKind | "capability.grant" | "capability.revoke" | "task.cancel"
+  kind:
+    | OperationKind
+    | "capability.grant"
+    | "capability.revoke"
+    | "task.cancel"
+    | "trusted_workspace.enable"
+    | "trusted_workspace.disable"
+    | "trusted_workspace.forget"
   risk?: RiskLevel
   targets: string[]
   status: string
@@ -202,6 +215,12 @@ export interface PingoAPI {
     get: () => Promise<ProjectInfo | null>
     choose: () => Promise<ProjectInfo | null>
     revoke: () => Promise<void>
+  }
+  trustedWorkspace: {
+    get: () => Promise<TrustedWorkspace | null>
+    choose: () => Promise<TrustedWorkspace | null>
+    disable: () => Promise<boolean>
+    forget: () => Promise<boolean>
   }
   settings: {
     get: () => Promise<AppSettings>

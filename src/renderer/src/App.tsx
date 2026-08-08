@@ -23,6 +23,7 @@ import type {
   OperationResult,
   PetState,
   TaskState,
+  TrustedWorkspace,
   UserPreferences,
 } from "../../shared/types.js"
 
@@ -43,6 +44,7 @@ interface PendingPermission {
 }
 
 const STORAGE_KEY = "pingo:task-messages"
+const TRUSTED_WORKSPACE_PROMPTED_KEY = "pingo:trusted-workspace-prompted"
 const MAX_MESSAGES = 40
 const HAPPY_STATE_DURATION_MS = 1800
 const POINTER_TAP_THRESHOLD_PX = 4
@@ -101,6 +103,9 @@ export function App(): ReactElement {
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [settingsNotice, setSettingsNotice] = useState("")
   const [grants, setGrants] = useState<CapabilityGrant[]>([])
+  const [trustedWorkspace, setTrustedWorkspace] = useState<TrustedWorkspace | null>(null)
+  const [trustedWorkspaceBusy, setTrustedWorkspaceBusy] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
   const [auditRecords, setAuditRecords] = useState<AuditRecord[]>([])
   const [appearanceScale, setAppearanceScale] = useState(1)
   const [petState, setPetState] = useState<PetState>("idle")
@@ -122,6 +127,27 @@ export function App(): ReactElement {
   const messagesEnd = useRef<HTMLDivElement>(null)
   const petStateTimer = useRef<number | null>(null)
   const currentPetState = PET_STATE_CONFIG[petState]
+
+  useEffect(() => {
+    let active = true
+    void window.pingo.trustedWorkspace
+      .get()
+      .then((workspace) => {
+        if (!active) return
+        setTrustedWorkspace(workspace)
+        if (!workspace && localStorage.getItem(TRUSTED_WORKSPACE_PROMPTED_KEY) !== "1") {
+          setExpanded(true)
+          setOnboardingOpen(true)
+          void window.pingo.pet.setExpanded(true)
+        }
+      })
+      .catch(() => {
+        // Keep the normal task surface available if the first-run check fails.
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     for (const imageSource of new Set(Object.values(PET_IMAGES))) {
@@ -167,10 +193,12 @@ export function App(): ReactElement {
         window.pingo.capabilities.list(),
         window.pingo.audit.list(),
       ])
+      const currentTrustedWorkspace = await window.pingo.trustedWorkspace.get()
       setSettings(current)
       setSettingsDraft(current)
       setGrants(currentGrants)
       setAuditRecords(currentAudit)
+      setTrustedWorkspace(currentTrustedWorkspace)
     } catch {
       setSettingsNotice("设置读取失败，请重试。")
     } finally {
@@ -179,6 +207,56 @@ export function App(): ReactElement {
   }, [])
 
   const closeSettings = useCallback(() => setSettingsOpen(false), [])
+
+  const chooseTrustedWorkspace = useCallback(async () => {
+    setTrustedWorkspaceBusy(true)
+    try {
+      const workspace = await window.pingo.trustedWorkspace.choose()
+      if (workspace) {
+        setTrustedWorkspace(workspace)
+        setOnboardingOpen(false)
+        localStorage.setItem(TRUSTED_WORKSPACE_PROMPTED_KEY, "1")
+        setGrants(await window.pingo.capabilities.list())
+        setSettingsNotice("已持续授权该目录，目录内文件操作不会重复询问。")
+      }
+    } catch {
+      setSettingsNotice("目录授权失败，请重试。")
+    } finally {
+      setTrustedWorkspaceBusy(false)
+    }
+  }, [])
+
+  const disableTrustedWorkspace = useCallback(async () => {
+    setTrustedWorkspaceBusy(true)
+    try {
+      const disabled = await window.pingo.trustedWorkspace.disable()
+      if (disabled) {
+        setTrustedWorkspace(null)
+        setGrants(await window.pingo.capabilities.list())
+        setSettingsNotice("已关闭持续授权；目录记录仍保留。")
+      }
+    } catch {
+      setSettingsNotice("关闭持续授权失败，请重试。")
+    } finally {
+      setTrustedWorkspaceBusy(false)
+    }
+  }, [])
+
+  const forgetTrustedWorkspace = useCallback(async () => {
+    setTrustedWorkspaceBusy(true)
+    try {
+      const forgotten = await window.pingo.trustedWorkspace.forget()
+      if (forgotten) {
+        setTrustedWorkspace(null)
+        setGrants([])
+        setSettingsNotice("已忘记目录；下次使用时需要重新选择。")
+      }
+    } catch {
+      setSettingsNotice("忘记目录失败，请重试。")
+    } finally {
+      setTrustedWorkspaceBusy(false)
+    }
+  }, [])
 
   const handleTaskEvent = useCallback(
     (event: ChatStreamEvent) => {
@@ -537,12 +615,50 @@ export function App(): ReactElement {
               notice={settingsNotice}
               grants={grants}
               auditRecords={auditRecords}
+              trustedWorkspace={trustedWorkspace}
+              trustedWorkspaceBusy={trustedWorkspaceBusy}
               setDraft={setSettingsDraft}
               save={saveSettings}
+              chooseTrustedWorkspace={chooseTrustedWorkspace}
+              disableTrustedWorkspace={disableTrustedWorkspace}
+              forgetTrustedWorkspace={forgetTrustedWorkspace}
               revokeGrant={revokeGrant}
             />
           ) : (
             <>
+              {onboardingOpen && (
+                <div
+                  className="action-card permission-card"
+                  role="dialog"
+                  aria-label="持续目录授权"
+                >
+                  <strong>选择目录并持续授权</strong>
+                  <p>
+                    授权后，Pingo 可以在所选目录内自动读取、创建、修改、移动文件或将文件移入废纸篓，
+                    不再重复询问。目录外访问、Terminal、项目脚本和系统自动化仍不会被放开。
+                  </p>
+                  <div className="action-buttons">
+                    <button
+                      type="button"
+                      disabled={trustedWorkspaceBusy}
+                      onClick={() => void chooseTrustedWorkspace()}
+                    >
+                      选择目录并授权
+                    </button>
+                    <button
+                      type="button"
+                      className="button-secondary"
+                      disabled={trustedWorkspaceBusy}
+                      onClick={() => {
+                        localStorage.setItem(TRUSTED_WORKSPACE_PROMPTED_KEY, "1")
+                        setOnboardingOpen(false)
+                      }}
+                    >
+                      暂不授权
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="message-list" aria-live="polite">
                 {messages.map((message) => (
                   <article key={message.id} className={`message message--${message.role}`}>
@@ -624,7 +740,7 @@ export function App(): ReactElement {
                     onChange={(event) => setDraft(event.target.value)}
                     onKeyDown={handleDraftKeyDown}
                     disabled={
-                      Boolean(approval || permission) ||
+                      Boolean(approval || permission || onboardingOpen) ||
                       taskState === "executing" ||
                       taskState === "planning"
                     }
@@ -710,8 +826,13 @@ function SettingsView({
   notice,
   grants,
   auditRecords,
+  trustedWorkspace,
+  trustedWorkspaceBusy,
   setDraft,
   save,
+  chooseTrustedWorkspace,
+  disableTrustedWorkspace,
+  forgetTrustedWorkspace,
   revokeGrant,
 }: {
   settings: AppSettings | null
@@ -720,8 +841,13 @@ function SettingsView({
   notice: string
   grants: CapabilityGrant[]
   auditRecords: AuditRecord[]
+  trustedWorkspace: TrustedWorkspace | null
+  trustedWorkspaceBusy: boolean
   setDraft: React.Dispatch<React.SetStateAction<UserPreferences | null>>
   save: () => Promise<void>
+  chooseTrustedWorkspace: () => Promise<void>
+  disableTrustedWorkspace: () => Promise<void>
+  forgetTrustedWorkspace: () => Promise<void>
   revokeGrant: (grantId: string) => Promise<void>
 }): ReactElement {
   if (!draft)
@@ -778,6 +904,43 @@ function SettingsView({
           <span className="info-icon" role="img" aria-label="API Key 仅由主进程读取。">
             <Icon name="info" />
           </span>
+        </div>
+        <div className="settings-section">
+          <strong>持续目录授权</strong>
+          {trustedWorkspace ? (
+            <>
+              <span>已授权目录：{trustedWorkspace.path}</span>
+              <span>目录内结构化文件操作不会重复询问；Terminal 不包含在内。</span>
+              <div className="grant-row">
+                <button
+                  type="button"
+                  disabled={trustedWorkspaceBusy}
+                  onClick={() => void disableTrustedWorkspace()}
+                >
+                  关闭持续授权
+                </button>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  disabled={trustedWorkspaceBusy}
+                  onClick={() => void forgetTrustedWorkspace()}
+                >
+                  忘记目录
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span>未开启。授权后，所选目录内的文件操作不会重复询问。</span>
+              <button
+                type="button"
+                disabled={trustedWorkspaceBusy}
+                onClick={() => void chooseTrustedWorkspace()}
+              >
+                选择目录并授权
+              </button>
+            </>
+          )}
         </div>
         <div className="settings-section">
           <strong>当前能力授权</strong>

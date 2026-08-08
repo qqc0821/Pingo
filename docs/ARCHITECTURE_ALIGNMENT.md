@@ -146,6 +146,7 @@ Local Data
 
 - `src/main/tasks/taskManager.ts` 负责 `proposed → awaiting_permission → planning → awaiting_confirmation → executing → completed/failed/cancelled` 状态、AI 工具循环、取消和事件转发。
 - `src/main/security/capabilityManager.ts`、`approvalBroker.ts`、`riskClassifier.ts` 和 `auditLogger.ts` 位于 Main Process；授权按窗口/会话/真实目录范围绑定，审批按不可变 digest、短 TTL 和一次性 token 绑定。
+- `SettingsStore` 额外保存用户显式创建的 Trusted Workspace；它只绑定一个真实目录，允许目录内结构化文件操作跨重启免重复授权，Terminal、项目脚本和系统自动化不继承。
 - `src/main/tools/fileOperations.ts` 只实现结构化目录/文本文件操作；`write_file` 和 `apply_patch` 使用原子替换与 hash/mtime 复检，`trash_path` 只使用可恢复废纸篓。
 - `src/main/terminal/commandPolicy.ts` 和 `runner.ts` 只接受白名单 executable/args/cwd，强制 `shell: false`、最小环境、超时、输出上限和取消回收。
 - `src/preload/index.ts` 只暴露任务、权限、确认、审计和撤销的一事一方法；Renderer 不获得 Node、文件系统、`child_process` 或通用命令接口。

@@ -39,9 +39,9 @@ npm run pack:mac
 ## 安全边界
 
 - Renderer 保持 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`，只通过 preload 白名单接收任务状态、权限卡和操作预览。
-- 能力授权、风险分级、审批 token、路径复检和真实执行全部由 Main Process 控制；权限默认拒绝，session 授权不会跨应用重启保留。
+- 能力授权、风险分级、审批 token、路径复检和真实执行全部由 Main Process 控制；普通 session 授权不会跨应用重启保留。首次启动可由用户为单个目录开启 Trusted Workspace，目录内结构化文件操作可跨重启免重复授权，但不包含 Terminal、项目脚本或目录外访问。
 - 文件工具只接受用户明确授权目录内的相对路径；`..`、绝对路径、反斜杠、符号链接越权、`.env`、密钥文件、敏感目录、二进制和超大文件默认拒绝。
-- 写入、补丁、移动、废纸篓和所有 Terminal 命令都必须逐次“允许一次”；写入使用原子替换并绑定文件 hash/mtime，删除只进入可恢复废纸篓。
+- 标准模式下写入、补丁、移动、废纸篓和所有 Terminal 命令都必须逐次“允许一次”；Trusted Workspace 内的结构化文件操作不再重复确认，但仍使用原子替换、路径/文件状态复检、审计和可恢复废纸篓。
 - Terminal 仅接受结构化 `executable + args + cwd`，强制 `shell: false`、最小环境、超时、输出上限和取消回收；Shell、解释器、sudo、安装、网络客户端和永久删除永远阻止。
 - 操作历史保存在应用数据目录的 `0600` 脱敏 JSONL 中，不保存 API Key、完整 Prompt、文件全文或未脱敏输出。
 

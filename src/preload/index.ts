@@ -26,6 +26,12 @@ const api: PingoAPI = {
     choose: () => ipcRenderer.invoke("project:choose"),
     revoke: () => ipcRenderer.invoke("project:revoke"),
   },
+  trustedWorkspace: {
+    get: () => ipcRenderer.invoke("trusted-workspace:get"),
+    choose: () => ipcRenderer.invoke("trusted-workspace:choose"),
+    disable: () => ipcRenderer.invoke("trusted-workspace:disable"),
+    forget: () => ipcRenderer.invoke("trusted-workspace:forget"),
+  },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     update: (settings) => ipcRenderer.invoke("settings:update", settings),

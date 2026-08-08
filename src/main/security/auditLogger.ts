@@ -6,7 +6,14 @@ import type { AuditRecord, OperationKind, RiskLevel } from "../../shared/types.j
 export interface AuditInput {
   taskId: string
   operationId?: string
-  kind: OperationKind | "capability.grant" | "capability.revoke" | "task.cancel"
+  kind:
+    | OperationKind
+    | "capability.grant"
+    | "capability.revoke"
+    | "task.cancel"
+    | "trusted_workspace.enable"
+    | "trusted_workspace.disable"
+    | "trusted_workspace.forget"
   risk?: RiskLevel
   targets?: string[]
   status: string

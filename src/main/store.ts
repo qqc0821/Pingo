@@ -1,6 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import type { UserPreferences, WindowPosition } from "../shared/types.js"
+import type { TrustedWorkspace, UserPreferences, WindowPosition } from "../shared/types.js"
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
   modelBaseUrl: "https://api.deepseek.com/v1/chat/completions",
@@ -14,6 +14,10 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
 interface PersistedSettings {
   windowPosition?: WindowPosition
   authorizedProjectPath?: string
+  trustedWorkspace?: {
+    path: string
+    authorizedAt: number
+  }
   preferences?: Partial<UserPreferences>
 }
 
@@ -49,6 +53,27 @@ export class SettingsStore {
     this.persist()
   }
 
+  getTrustedWorkspace(): TrustedWorkspace | undefined {
+    const trusted = this.data.trustedWorkspace
+    if (!trusted) return undefined
+    return {
+      path: trusted.path,
+      name: basenameForPath(trusted.path),
+      authorizedAt: trusted.authorizedAt,
+    }
+  }
+
+  setTrustedWorkspace(path: string, authorizedAt = Date.now()): void {
+    this.data.trustedWorkspace = { path, authorizedAt }
+    this.data.authorizedProjectPath = path
+    this.persist()
+  }
+
+  clearTrustedWorkspace(): void {
+    delete this.data.trustedWorkspace
+    this.persist()
+  }
+
   getPreferences(): UserPreferences {
     return { ...DEFAULT_PREFERENCES, ...this.data.preferences }
   }
@@ -75,6 +100,7 @@ export class SettingsStore {
     const temporaryPath = `${this.filePath}.tmp`
     mkdirSync(directory, { recursive: true })
     writeFileSync(temporaryPath, JSON.stringify(this.data, null, 2), "utf8")
+    chmodSync(temporaryPath, 0o600)
     renameSync(temporaryPath, this.filePath)
   }
 }
@@ -85,6 +111,7 @@ function isPersistedSettings(value: unknown): value is PersistedSettings {
   const candidate = value as {
     windowPosition?: unknown
     authorizedProjectPath?: unknown
+    trustedWorkspace?: unknown
     preferences?: unknown
   }
   if (candidate.windowPosition !== undefined) {
@@ -100,8 +127,19 @@ function isPersistedSettings(value: unknown): value is PersistedSettings {
   ) {
     return false
   }
+  if (candidate.trustedWorkspace !== undefined) {
+    if (typeof candidate.trustedWorkspace !== "object" || candidate.trustedWorkspace === null)
+      return false
+    const trusted = candidate.trustedWorkspace as { path?: unknown; authorizedAt?: unknown }
+    if (typeof trusted.path !== "string" || typeof trusted.authorizedAt !== "number") return false
+  }
   return (
     candidate.preferences === undefined ||
     (typeof candidate.preferences === "object" && candidate.preferences !== null)
   )
+}
+
+function basenameForPath(path: string): string {
+  const normalized = path.replaceAll("\\", "/").replace(/\/+$/, "")
+  return normalized.split("/").at(-1) || path
 }
