@@ -3,7 +3,7 @@ import { dialog } from "electron"
 import type { OpenDialogOptions } from "electron"
 import { realpathSync, statSync } from "node:fs"
 import { basename, join } from "node:path"
-import type { AppSettings, PetState, TrustedWorkspace, UserPreferences } from "../shared/types.js"
+import type { AppSettings, TrustedWorkspace, UserPreferences } from "../shared/types.js"
 import type {
   Capability,
   CapabilityRequest,
@@ -18,23 +18,9 @@ import {
   endDrag,
   getPetWindow,
   moveDrag,
-  sendPetState,
   setPetExpanded,
   setPetPreferences,
 } from "./window.js"
-
-const PET_STATE_PREVIEWS: ReadonlyArray<{ label: string; state: PetState }> = [
-  { label: "待机", state: "idle" },
-  { label: "开心", state: "happy" },
-  { label: "思考", state: "thinking" },
-  { label: "点头", state: "nod" },
-  { label: "担心", state: "worried" },
-  { label: "鼓励", state: "encourage" },
-  { label: "困倦", state: "sleepy" },
-  { label: "提醒", state: "reminder" },
-  { label: "专注陪伴", state: "focus" },
-  { label: "完成庆祝", state: "celebrate" },
-]
 
 export function registerIpcHandlers(settingsStore: SettingsStore): void {
   const auditLogger = new AuditLogger(join(app.getPath("userData"), "operation-history.jsonl"))
@@ -60,14 +46,6 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     if (!owner || owner.webContents !== event.sender) return
 
     Menu.buildFromTemplate([
-      {
-        label: "状态预览",
-        submenu: PET_STATE_PREVIEWS.map(({ label, state }) => ({
-          label,
-          click: () => sendPetState(state, state === "idle" ? undefined : 3_500),
-        })),
-      },
-      { type: "separator" },
       { label: "关闭 Pingo", click: () => app.quit() },
     ]).popup({ window: owner })
   })
