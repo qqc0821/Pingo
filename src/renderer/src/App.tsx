@@ -1155,11 +1155,36 @@ export function App(): ReactElement {
                           {approval.display.riskBadge.label}
                         </span>
                         <span>
-                          读取根：{approval.display.pathPreview.readRoots.join("、") || "无"}
+                          读取范围：项目目录与系统运行库（
+                          {approval.display.pathPreview.readRoots.length} 项）
                         </span>
                         <span>
-                          写入根：{approval.display.pathPreview.writeRoots.join("、") || "无"}
+                          写入范围：
+                          {approval.display.pathPreview.writeRoots.length === 0
+                            ? "无"
+                            : terminalPlan?.effects.workspace === "write"
+                              ? `项目目录与临时目录（${approval.display.pathPreview.writeRoots.length} 项）`
+                              : `仅临时目录（${approval.display.pathPreview.writeRoots.length} 项）`}
                         </span>
+                        <span>
+                          保护范围：敏感文件与凭据（
+                          {approval.display.pathPreview.protectedPaths.length} 项）
+                        </span>
+                        <details className="approval-path-details">
+                          <summary>查看完整路径范围</summary>
+                          <div className="approval-path-list">
+                            <strong>读取根</strong>
+                            <code>{approval.display.pathPreview.readRoots.join("\n") || "无"}</code>
+                            <strong>写入根</strong>
+                            <code>
+                              {approval.display.pathPreview.writeRoots.join("\n") || "无"}
+                            </code>
+                            <strong>保护路径</strong>
+                            <code>
+                              {approval.display.pathPreview.protectedPaths.join("\n") || "无"}
+                            </code>
+                          </div>
+                        </details>
                       </div>
                     )}
                     <label className="approval-reason">

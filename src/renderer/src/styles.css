@@ -48,6 +48,7 @@ button {
   flex-direction: column;
   min-height: 0;
   padding: 14px;
+  overflow: hidden;
   border: 1px solid #e5e5e5;
   border-radius: 20px;
   background: #fff;
@@ -305,6 +306,12 @@ button {
   line-height: 1.5;
 }
 
+.approval-card {
+  max-height: min(62vh, 660px);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
 .action-card strong {
   display: block;
   color: #7c2d12;
@@ -385,11 +392,41 @@ button {
   border-radius: 8px;
   background: #fef3c7;
   color: #78350f;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.approval-path-details {
+  margin-top: 2px;
+  color: #92400e;
+  font-size: 10px;
+}
+
+.approval-path-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.approval-path-list {
+  display: grid;
+  gap: 3px;
+  margin-top: 5px;
+}
+
+.approval-path-list code {
+  max-height: 108px;
+  overflow: auto;
+  padding: 5px;
+  border-radius: 5px;
+  background: rgb(255 255 255 / 62%);
+  color: #78350f;
   font:
-    10px/1.4 ui-monospace,
+    9px/1.35 ui-monospace,
     SFMono-Regular,
     Menlo,
     monospace;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -405,6 +442,21 @@ button {
 .settings-section > input {
   width: 100%;
   box-sizing: border-box;
+}
+
+.approval-reason input {
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid #e5d9cb;
+  border-radius: 8px;
+  outline: none;
+  background: #fff;
+  color: #343541;
+}
+
+.approval-reason input:focus {
+  border-color: #c2410c;
+  box-shadow: 0 0 0 3px rgb(194 65 12 / 10%);
 }
 
 .terminal-run-row {
@@ -439,6 +491,14 @@ button {
   align-items: center;
   justify-content: flex-end;
   gap: 7px;
+}
+
+.approval-card > .action-buttons {
+  position: sticky;
+  bottom: -10px;
+  z-index: 1;
+  padding: 8px 0 2px;
+  background: linear-gradient(transparent, #fffaf4 34%);
 }
 
 .action-buttons button,
