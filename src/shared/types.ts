@@ -21,6 +21,72 @@ export interface ChatMessageInput {
   content: string
 }
 
+export type ConversationItemKind =
+  | "message"
+  | "tool"
+  | "capability-request"
+  | "approval-request"
+  | "operation-result"
+  | "context-cleared"
+  | "system"
+
+export type ConversationItemStatus = "complete" | "streaming" | "interrupted" | "error"
+
+export interface ConversationSummary {
+  conversationId: string
+  title: string
+  activeContextEpochId: string
+  revision: number
+  createdAt: number
+  updatedAt: number
+  archivedAt?: number
+}
+
+export interface ConversationItem {
+  itemId: string
+  conversationId: string
+  turnId?: string
+  runId?: string
+  contextEpochId: string
+  kind: ConversationItemKind
+  role?: ChatMessageRole
+  status: ConversationItemStatus
+  content: string
+  detail?: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  items: ConversationItem[]
+}
+
+export interface ConversationSubmitRequest {
+  conversationId: string
+  clientRequestId: string
+  expectedRevision: number
+  expectedContextEpochId: string
+  content: string
+}
+
+export interface ConversationSubmitResult {
+  taskId: string
+  started: boolean
+  conversation: ConversationDetail
+}
+
+export interface ClearContextRequest {
+  conversationId: string
+  expectedRevision: number
+}
+
+export interface ContextPreview {
+  conversationId: string
+  contextEpochId: string
+  messageCount: number
+  characterCount: number
+}
+
 export type ChatStreamEvent =
   | { type: "start" }
   | { type: "chunk"; content: string }
@@ -347,6 +413,18 @@ export interface PingoAPI {
     grant: (request: CapabilityRequest) => Promise<CapabilityGrant | null>
     deny: (taskId: string) => Promise<boolean>
     onEvent: (listener: (event: ChatStreamEvent) => void) => () => void
+  }
+  conversation: {
+    list: () => Promise<ConversationSummary[]>
+    get: (conversationId: string) => Promise<ConversationDetail | null>
+    create: () => Promise<ConversationDetail>
+    submit: (request: ConversationSubmitRequest) => Promise<ConversationSubmitResult>
+    clearContext: (request: ClearContextRequest) => Promise<ConversationDetail>
+    undoClearContext: (conversationId: string) => Promise<ConversationDetail | null>
+    contextPreview: (conversationId: string) => Promise<ContextPreview | null>
+    importLegacy: (
+      messages: Array<{ id: string; role: "user" | "assistant" | "error"; content: string }>,
+    ) => Promise<ConversationDetail | null>
   }
   audit: {
     list: () => Promise<AuditRecord[]>

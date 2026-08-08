@@ -84,8 +84,13 @@ export class TaskManager {
     this.terminalFeatureFlags = dependencies.terminalFeatureFlags ?? getTerminalFeatureFlags()
   }
 
-  submit(sourceWindowId: string, messages: ChatMessageInput[], emit: TaskEventSink): string {
-    const taskId = randomUUID()
+  submit(
+    sourceWindowId: string,
+    messages: ChatMessageInput[],
+    emit: TaskEventSink,
+    options?: { taskId?: string },
+  ): string {
+    const taskId = options?.taskId ?? randomUUID()
     const task: TaskRecord = {
       taskId,
       sourceWindowId,

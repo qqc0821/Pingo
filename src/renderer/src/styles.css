@@ -89,6 +89,31 @@ button {
   gap: 7px;
 }
 
+.conversation-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.conversation-actions select {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  background: #fff;
+  color: #4b5563;
+  font-size: 11px;
+  padding: 5px 7px;
+}
+
+.conversation-actions .button-secondary {
+  flex: 0 0 auto;
+  padding: 5px 7px;
+  font-size: 10px;
+}
+
 .panel-status--awaiting_permission,
 .panel-status--awaiting_confirmation {
   background: #fff7ed;
