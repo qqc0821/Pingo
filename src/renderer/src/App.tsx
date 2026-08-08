@@ -17,8 +17,9 @@ import type {
   AuditRecord,
   CapabilityGrant,
   Capability,
-  ChatMessageInput,
   ChatStreamEvent,
+  ConversationDetail,
+  ConversationSummary,
   OperationDecision,
   OperationResult,
   PetState,
@@ -43,9 +44,8 @@ interface PendingPermission {
   scopeRoots: string[]
 }
 
-const STORAGE_KEY = "pingo:task-messages"
+const LEGACY_STORAGE_KEY = "pingo:task-messages"
 const TRUSTED_WORKSPACE_PROMPTED_KEY = "pingo:trusted-workspace-prompted"
-const MAX_MESSAGES = 40
 const HAPPY_STATE_DURATION_MS = 1800
 const POINTER_TAP_THRESHOLD_PX = 4
 
@@ -110,16 +110,19 @@ export function App(): ReactElement {
   const [appearanceScale, setAppearanceScale] = useState(1)
   const [petState, setPetState] = useState<PetState>("idle")
   const [petStateRevision, setPetStateRevision] = useState(0)
-  const [messages, setMessages] = useState<LocalMessage[]>(loadMessages)
+  const [messages, setMessages] = useState<LocalMessage[]>([])
+  const [conversation, setConversation] = useState<ConversationDetail | null>(null)
+  const [conversationSummaries, setConversationSummaries] = useState<ConversationSummary[]>([])
   const [draft, setDraft] = useState("")
   const [taskId, setTaskId] = useState<string | null>(null)
   const [taskState, setTaskState] = useState<TaskState | "ready">("ready")
   const [notice, setNotice] = useState("提出任务，Pingo 会在需要时先请求授权。")
   const [toolActivity, setToolActivity] = useState("")
   const [permission, setPermission] = useState<PendingPermission | null>(null)
-  const [approval, setApproval] = useState<ApprovalRequest | null>(null)
+  const [approvals, setApprovals] = useState<Record<string, ApprovalRequest>>({})
   const [lastResult, setLastResult] = useState<OperationResult | null>(null)
   const [permissionBusy, setPermissionBusy] = useState(false)
+  const [approvalNow, setApprovalNow] = useState(() => Date.now())
   const dragStart = useRef<{ x: number; y: number; pointerId: number; didDrag: boolean } | null>(
     null,
   )
@@ -127,6 +130,21 @@ export function App(): ReactElement {
   const messagesEnd = useRef<HTMLDivElement>(null)
   const petStateTimer = useRef<number | null>(null)
   const currentPetState = PET_STATE_CONFIG[petState]
+  const approvalList = Object.values(approvals)
+  const taskIsActive = Boolean(taskId && !["completed", "failed", "cancelled"].includes(taskState))
+  const canUndoContext = Boolean(
+    conversation?.items.some(
+      (item) =>
+        item.kind === "context-cleared" &&
+        item.contextEpochId === conversation.activeContextEpochId,
+    ),
+  )
+
+  useEffect(() => {
+    if (approvalList.length === 0) return
+    const timer = window.setInterval(() => setApprovalNow(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [approvalList.length])
 
   useEffect(() => {
     let active = true
@@ -158,7 +176,6 @@ export function App(): ReactElement {
   }, [])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-MAX_MESSAGES)))
     messagesEnd.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
@@ -180,6 +197,75 @@ export function App(): ReactElement {
       }, durationMs)
     }
   }, [])
+
+  const applyConversation = useCallback((nextConversation: ConversationDetail) => {
+    setConversation(nextConversation)
+    setMessages(
+      nextConversation.items
+        .filter(
+          (item) => item.kind === "message" && (item.role === "user" || item.role === "assistant"),
+        )
+        .map((item) => ({
+          id: item.itemId,
+          role: item.status === "error" ? "error" : item.role === "user" ? "user" : "assistant",
+          content: item.content,
+        })),
+    )
+    setConversationSummaries((current) => {
+      const summary = {
+        conversationId: nextConversation.conversationId,
+        title: nextConversation.title,
+        activeContextEpochId: nextConversation.activeContextEpochId,
+        revision: nextConversation.revision,
+        createdAt: nextConversation.createdAt,
+        updatedAt: nextConversation.updatedAt,
+        ...(nextConversation.archivedAt === undefined
+          ? {}
+          : { archivedAt: nextConversation.archivedAt }),
+      }
+      return [
+        summary,
+        ...current.filter((item) => item.conversationId !== summary.conversationId),
+      ].sort((left, right) => right.updatedAt - left.updatedAt)
+    })
+  }, [])
+
+  const refreshConversation = useCallback(
+    async (conversationId?: string) => {
+      const targetId = conversationId ?? conversation?.conversationId
+      if (!targetId) return
+      const nextConversation = await window.pingo.conversation.get(targetId)
+      if (nextConversation) applyConversation(nextConversation)
+    },
+    [applyConversation, conversation?.conversationId],
+  )
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const legacyMessages = loadLegacyMessages()
+        const imported = legacyMessages.length
+          ? await window.pingo.conversation.importLegacy(legacyMessages)
+          : null
+        if (imported && legacyMessages.length) localStorage.removeItem(LEGACY_STORAGE_KEY)
+        const summaries = await window.pingo.conversation.list()
+        if (!active) return
+        setConversationSummaries(summaries)
+        const initial =
+          imported ??
+          (summaries[0]
+            ? await window.pingo.conversation.get(summaries[0].conversationId)
+            : await window.pingo.conversation.create())
+        if (initial && active) applyConversation(initial)
+      } catch {
+        if (active) setNotice("聊天记录读取失败；请重试或新建对话。")
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [applyConversation])
 
   const openSettings = useCallback(async () => {
     setExpanded(true)
@@ -280,12 +366,15 @@ export function App(): ReactElement {
         } else if (event.state === "completed") {
           setNotice("任务完成")
           showPetState("celebrate", HAPPY_STATE_DURATION_MS)
+          void refreshConversation()
         } else if (event.state === "cancelled") {
           setNotice("任务已取消")
           showPetState("idle")
+          void refreshConversation()
         } else if (event.state === "failed") {
           setNotice("任务失败，请查看 Pingo 的说明")
           showPetState("worried")
+          void refreshConversation()
         }
         return
       }
@@ -300,11 +389,16 @@ export function App(): ReactElement {
       }
       if (event.type === "approval-request") {
         setTaskId(event.request.taskId)
-        setApproval(event.request)
+        setApprovals((current) => ({ ...current, [event.request.operationId]: event.request }))
         return
       }
       if (event.type === "operation-result") {
         setLastResult(event.result)
+        setApprovals((current) => {
+          const next = { ...current }
+          delete next[event.result.operationId]
+          return next
+        })
         if (event.result.status !== "completed") setNotice(event.result.detail)
         return
       }
@@ -324,11 +418,13 @@ export function App(): ReactElement {
       } else if (event.type === "done") {
         assistantId.current = null
         setToolActivity("")
+        void refreshConversation()
       } else if (event.type === "cancelled") {
         assistantId.current = null
         setTaskState("cancelled")
         setNotice("任务已取消")
         showPetState("idle")
+        void refreshConversation()
       } else if (event.type === "error") {
         assistantId.current = null
         setTaskState("failed")
@@ -343,9 +439,10 @@ export function App(): ReactElement {
             ),
           )
         }
+        void refreshConversation()
       }
     },
-    [showPetState],
+    [refreshConversation, showPetState],
   )
 
   useEffect(() => {
@@ -422,12 +519,90 @@ export function App(): ReactElement {
   const stopTask = useCallback(() => {
     if (taskId) window.pingo.task.cancel(taskId)
     assistantId.current = null
-    setTaskState("cancelled")
-    setApproval(null)
+    setApprovals({})
     setPermission(null)
-    setNotice("已取消当前任务")
-    showPetState("idle")
-  }, [showPetState, taskId])
+    setNotice("正在取消，等待终端进程真正结束…")
+  }, [taskId])
+
+  const createConversation = useCallback(async () => {
+    if (taskId && !["completed", "failed", "cancelled"].includes(taskState)) return
+    try {
+      const nextConversation = await window.pingo.conversation.create()
+      assistantId.current = null
+      setTaskId(null)
+      setTaskState("ready")
+      setNotice("已新建对话。")
+      setToolActivity("")
+      setPermission(null)
+      setApprovals({})
+      setLastResult(null)
+      applyConversation(nextConversation)
+    } catch {
+      setNotice("新建对话失败，请重试。")
+    }
+  }, [applyConversation, taskId, taskState])
+
+  const switchConversation = useCallback(
+    async (conversationId: string) => {
+      if (conversationId === conversation?.conversationId) return
+      if (taskId && !["completed", "failed", "cancelled"].includes(taskState)) {
+        setNotice("请先结束当前任务，再切换对话。")
+        return
+      }
+      try {
+        const nextConversation = await window.pingo.conversation.get(conversationId)
+        if (nextConversation) {
+          assistantId.current = null
+          setTaskId(null)
+          setTaskState("ready")
+          setPermission(null)
+          setApprovals({})
+          setLastResult(null)
+          applyConversation(nextConversation)
+        }
+      } catch {
+        setNotice("切换对话失败，请重试。")
+      }
+    },
+    [applyConversation, conversation?.conversationId, taskId, taskState],
+  )
+
+  const clearConversationContext = useCallback(async () => {
+    if (!conversation) return
+    if (taskId && !["completed", "failed", "cancelled"].includes(taskState)) {
+      setNotice("请先取消并等待当前任务结束，再清空上下文。")
+      return
+    }
+    if (!window.confirm("清空后续模型上下文？历史记录会保留，之后的回答不会再引用此前对话。"))
+      return
+    try {
+      const nextConversation = await window.pingo.conversation.clearContext({
+        conversationId: conversation.conversationId,
+        expectedRevision: conversation.revision,
+      })
+      applyConversation(nextConversation)
+      setNotice("已清空上下文。可在发送下一条消息前撤销。")
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "清空上下文失败，请重试。")
+    }
+  }, [applyConversation, conversation, taskId, taskState])
+
+  const undoClearConversationContext = useCallback(async () => {
+    if (!conversation) return
+    try {
+      const nextConversation = await window.pingo.conversation.undoClearContext(
+        conversation.conversationId,
+      )
+      if (!nextConversation) {
+        setNotice("此操作已不能撤销。")
+        return
+      }
+      applyConversation(nextConversation)
+      setNotice("已恢复先前上下文。")
+    } catch {
+      setNotice("恢复上下文失败，请重试。")
+    }
+  }, [applyConversation, conversation])
 
   const submitTask = useCallback(
     async (event?: FormEvent) => {
@@ -438,35 +613,34 @@ export function App(): ReactElement {
         (taskState !== "ready" && !["completed", "failed", "cancelled"].includes(taskState))
       )
         return
-      const userMessage: LocalMessage = { id: `user-${Date.now()}`, role: "user", content }
-      const assistantMessage: LocalMessage = {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        content: "",
-      }
-      const nextMessages: LocalMessage[] = [...messages, userMessage, assistantMessage].slice(
-        -MAX_MESSAGES,
-      )
-      const nextAssistant = nextMessages.at(-1)
-      if (!nextAssistant) return
-      assistantId.current = nextAssistant.id
-      setMessages(nextMessages)
+      if (!conversation) return
       setDraft("")
-      setApproval(null)
+      setApprovals({})
       setPermission(null)
       setLastResult(null)
       setTaskState("proposed")
       setNotice("正在提交任务…")
       try {
-        const response = await window.pingo.task.submit(buildModelHistory(nextMessages))
+        const response = await window.pingo.conversation.submit({
+          conversationId: conversation.conversationId,
+          clientRequestId: crypto.randomUUID(),
+          expectedRevision: conversation.revision,
+          expectedContextEpochId: conversation.activeContextEpochId,
+          content,
+        })
+        applyConversation(response.conversation)
+        const nextAssistant = response.conversation.items
+          .filter((item) => item.kind === "message" && item.role === "assistant")
+          .at(-1)
+        assistantId.current = nextAssistant?.itemId ?? null
         setTaskId(response.taskId)
-      } catch {
+      } catch (error) {
         assistantId.current = null
         setTaskState("failed")
-        setNotice("任务提交失败，请重试。")
+        setNotice(error instanceof Error ? error.message : "任务提交失败，请重试。")
       }
     },
-    [draft, messages, taskState],
+    [applyConversation, conversation, draft, taskState],
   )
 
   const handleDraftKeyDown = useCallback(
@@ -505,17 +679,33 @@ export function App(): ReactElement {
   }, [permission])
 
   const decideApproval = useCallback(
-    async (decision: OperationDecision["decision"]) => {
-      if (!approval) return
+    async (approval: ApprovalRequest, decision: OperationDecision["decision"]) => {
       await window.pingo.task.decide({
         taskId: approval.taskId,
         operationId: approval.operationId,
         decision,
       })
-      setApproval(null)
+      setApprovals((current) => {
+        const next = { ...current }
+        delete next[approval.operationId]
+        return next
+      })
     },
-    [approval],
+    [],
   )
+
+  const copyApprovalCommand = useCallback(async (request: ApprovalRequest) => {
+    const terminalPlan = request.plan.terminalPlan
+    const command = terminalPlan
+      ? formatDisplayCommand(terminalPlan.executable.displayName, terminalPlan.argv)
+      : request.plan.preview
+    try {
+      await navigator.clipboard.writeText(command)
+      setNotice("已复制真实命令（不会执行）")
+    } catch {
+      setNotice("复制失败，请手动选择预览中的命令")
+    }
+  }, [])
 
   const undoLast = useCallback(async () => {
     if (!lastResult?.undoId || !taskId) return
@@ -558,7 +748,7 @@ export function App(): ReactElement {
                 name={
                   settingsOpen
                     ? "settings"
-                    : approval || permission
+                    : approvalList.length > 0 || permission
                       ? "info"
                       : taskState === "executing"
                         ? "tool"
@@ -626,6 +816,45 @@ export function App(): ReactElement {
             />
           ) : (
             <>
+              <div className="conversation-actions" aria-label="对话操作">
+                <select
+                  aria-label="选择历史对话"
+                  value={conversation?.conversationId ?? ""}
+                  disabled={taskIsActive}
+                  onChange={(event) => void switchConversation(event.target.value)}
+                >
+                  {conversationSummaries.map((item) => (
+                    <option key={item.conversationId} value={item.conversationId}>
+                      {item.title}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  disabled={taskIsActive}
+                  onClick={() => void createConversation()}
+                >
+                  新建
+                </button>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  disabled={!conversation || taskIsActive}
+                  onClick={() => void clearConversationContext()}
+                >
+                  清空上下文
+                </button>
+                {canUndoContext && (
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    onClick={() => void undoClearConversationContext()}
+                  >
+                    撤销清空
+                  </button>
+                )}
+              </div>
               {onboardingOpen && (
                 <div
                   className="action-card permission-card"
@@ -700,31 +929,95 @@ export function App(): ReactElement {
                   </div>
                 </div>
               )}
-              {approval && (
-                <div className="action-card approval-card" role="dialog" aria-label="操作确认">
-                  <strong>
-                    {approval.plan.risk} · {approval.plan.kind}
-                  </strong>
-                  <p className="risk-reason">{approval.plan.riskReason}</p>
-                  <pre>{approval.plan.preview}</pre>
-                  <p>
-                    可撤销：{approval.plan.reversible ? "是" : "否"} · 仅允许一次 · 预览摘要{" "}
-                    {approval.plan.digest.slice(0, 12)}…
-                  </p>
-                  <div className="action-buttons">
-                    <button type="button" onClick={() => void decideApproval("approve")}>
-                      允许一次
-                    </button>
-                    <button
-                      type="button"
-                      className="button-secondary"
-                      onClick={() => void decideApproval("deny")}
-                    >
-                      拒绝
-                    </button>
+              {approvalList.map((approval) => {
+                const terminalPlan = approval.plan.terminalPlan
+                const remainingMs = Math.max(0, approval.expiresAt - approvalNow)
+                const remainingSeconds = Math.ceil(remainingMs / 1_000)
+                const expired = remainingMs === 0
+                return (
+                  <div
+                    key={approval.operationId}
+                    className="action-card approval-card"
+                    role="dialog"
+                    aria-label={`操作确认 ${approval.operationId}`}
+                  >
+                    <strong>
+                      {approval.plan.risk} ·{" "}
+                      {terminalPlan ? "Terminal operation" : approval.plan.kind}
+                    </strong>
+                    <p className="risk-reason">{approval.plan.riskReason}</p>
+                    {terminalPlan ? (
+                      <>
+                        <div className="approval-command">
+                          <span>真实命令</span>
+                          <code>
+                            {formatDisplayCommand(
+                              terminalPlan.executable.displayName,
+                              terminalPlan.argv,
+                            )}
+                          </code>
+                        </div>
+                        <div className="approval-facts">
+                          <span>工作目录：{terminalPlan.cwd.relativePath || "."}</span>
+                          <span>
+                            代码执行：{terminalPlan.effects.projectCodeExecution ? "是" : "否"}
+                          </span>
+                          <span>文件范围：workspace {terminalPlan.effects.workspace}</span>
+                          <span>网络：关闭（公网、localhost、私网、Unix socket）</span>
+                          <span>HOME/密钥/目录外：不可用</span>
+                          <span>
+                            限制：{terminalPlan.limits.timeoutMs / 1_000}s · 输出{" "}
+                            {terminalPlan.limits.outputBytes} bytes · 可撤销：否
+                          </span>
+                        </div>
+                        {terminalPlan.projectScript && (
+                          <div className="approval-script">
+                            <span>
+                              脚本：{terminalPlan.projectScript.name} · 来源：
+                              {terminalPlan.projectScript.packageJsonRelativePath}
+                            </span>
+                            <code>{terminalPlan.projectScript.body}</code>
+                            <small>
+                              package.json SHA-256：{terminalPlan.projectScript.packageJsonSha256}
+                            </small>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <pre>{approval.plan.preview}</pre>
+                    )}
+                    <p>
+                      一次性 token · 计划摘要{" "}
+                      {(terminalPlan?.planDigest ?? approval.plan.digest).slice(0, 12)}… ·{" "}
+                      {expired ? "已过期，请重新规划" : `${remainingSeconds}s 后过期`}
+                    </p>
+                    <div className="action-buttons">
+                      <button
+                        type="button"
+                        disabled={expired}
+                        onClick={() => void decideApproval(approval, "approve")}
+                      >
+                        运行一次
+                      </button>
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        disabled={expired}
+                        onClick={() => void decideApproval(approval, "deny")}
+                      >
+                        拒绝
+                      </button>
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        onClick={() => void copyApprovalCommand(approval)}
+                      >
+                        复制命令
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
+                )
+              })}
               {lastResult?.undoId && lastResult.status === "completed" && (
                 <div className="result-actions">
                   <span>这项文件操作可以撤销。</span>
@@ -740,7 +1033,7 @@ export function App(): ReactElement {
                     onChange={(event) => setDraft(event.target.value)}
                     onKeyDown={handleDraftKeyDown}
                     disabled={
-                      Boolean(approval || permission || onboardingOpen) ||
+                      Boolean(approvalList.length > 0 || permission || onboardingOpen) ||
                       taskState === "executing" ||
                       taskState === "planning"
                     }
@@ -1042,11 +1335,11 @@ function SettingsView({
   )
 }
 
-function loadMessages(): LocalMessage[] {
+function loadLegacyMessages(): LocalMessage[] {
   try {
-    const value: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]")
+    const value: unknown = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) || "[]")
     if (!Array.isArray(value)) return []
-    return value.filter(isLocalMessage).slice(-MAX_MESSAGES)
+    return value.filter(isLocalMessage).slice(-200)
   } catch {
     return []
   }
@@ -1062,14 +1355,10 @@ function isLocalMessage(value: unknown): value is LocalMessage {
   )
 }
 
-function buildModelHistory(messages: LocalMessage[]): ChatMessageInput[] {
-  return messages
-    .slice(-24)
-    .filter((message) => message.content || message.role === "assistant")
-    .map((message) => ({
-      role: message.role === "error" ? "assistant" : message.role,
-      content: message.content,
-    }))
+function formatDisplayCommand(executable: string, argv: string[]): string {
+  return [executable, ...argv]
+    .map((value) => (/^[A-Za-z0-9_./:=+-]+$/.test(value) ? value : JSON.stringify(value)))
+    .join(" ")
 }
 
 function formatTaskState(state: TaskState | "ready"): string {

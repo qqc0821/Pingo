@@ -132,9 +132,10 @@ test("trusted workspace does not implicitly authorize Terminal", async () => {
                       id: "trusted-terminal-1",
                       type: "function",
                       function: {
-                        name: "terminal_execute",
+                        name: "terminal_intent",
                         arguments: JSON.stringify({
-                          executable: "/bin/pwd",
+                          kind: "git.read",
+                          action: "status",
                           args: [],
                           cwd: ".",
                         }),

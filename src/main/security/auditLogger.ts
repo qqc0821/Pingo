@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto"
 import { appendFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs"
 import { dirname } from "node:path"
-import type { AuditRecord, OperationKind, RiskLevel } from "../../shared/types.js"
+import type {
+  AuditRecord,
+  OperationKind,
+  RiskLevel,
+  TerminalPolicyCode,
+} from "../../shared/types.js"
 
 export interface AuditInput {
   taskId: string
@@ -18,6 +23,8 @@ export interface AuditInput {
   targets?: string[]
   status: string
   detail?: string
+  planDigest?: string
+  policyCode?: TerminalPolicyCode
 }
 
 export class AuditLogger {
@@ -41,6 +48,10 @@ export class AuditLogger {
       status: safeText(input.status, 80),
       createdAt: now,
       ...(input.detail ? { detail: safeText(input.detail, 240) } : {}),
+      ...(input.planDigest && /^[a-f0-9]{64}$/.test(input.planDigest)
+        ? { planDigest: input.planDigest }
+        : {}),
+      ...(input.policyCode ? { policyCode: input.policyCode } : {}),
     }
     appendFileSync(this.filePath, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 })
     chmodSync(this.filePath, 0o600)

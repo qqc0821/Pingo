@@ -1,3 +1,5 @@
+import type { TerminalPolicyFailure } from "../../shared/types.js"
+
 export interface ToolDefinition {
   type: "function"
   function: {
@@ -10,4 +12,5 @@ export interface ToolDefinition {
 export interface ToolExecution {
   content: string
   detail: string
+  policyFailure?: TerminalPolicyFailure
 }

@@ -135,19 +135,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     type: "function",
     function: {
-      name: "terminal_execute",
-      description: "运行 Pingo 策略允许的结构化 Terminal 命令；所有命令都需要逐次确认。",
+      name: "terminal_intent",
+      description:
+        "提出受限 TerminalIntent。只能使用 git.read(status/diff/log) 或 project.script(lint/typecheck/format:check/test/build)；executable、argv、环境、风险和沙箱由 Pingo 主进程决定。每条命令都要用户运行一次确认。",
       parameters: {
         type: "object",
         properties: {
-          executable: { type: "string", description: "允许的绝对可执行文件路径" },
-          args: { type: "array", items: { type: "string" }, description: "参数数组" },
-          cwd: { type: "string", description: "授权项目内相对工作目录" },
-          timeoutMs: { type: "number", description: "1,000 到 30,000 毫秒" },
-          outputLimitBytes: { type: "number", description: "输出上限" },
-          envKeys: { type: "array", items: { type: "string" }, description: "最小环境变量白名单" },
+          kind: { type: "string", enum: ["git.read", "project.script"] },
+          action: { type: "string", enum: ["status", "diff", "log"] },
+          args: { type: "array", items: { type: "string" } },
+          packageManager: { type: "string", enum: ["npm"] },
+          script: { type: "string", enum: ["lint", "typecheck", "format:check", "test", "build"] },
+          forwardedArgs: { type: "array", items: { type: "string" } },
+          cwd: { type: "string", description: "workspace 内相对工作目录" },
         },
-        required: ["executable", "cwd"],
+        required: ["kind", "cwd"],
         additionalProperties: false,
       },
     },
