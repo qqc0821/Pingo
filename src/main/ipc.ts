@@ -1,8 +1,8 @@
-import { app, ipcMain, Menu } from "electron"
+import { app, ipcMain, Menu, shell } from "electron"
 import { dialog } from "electron"
 import type { OpenDialogOptions } from "electron"
 import { realpathSync, statSync } from "node:fs"
-import { basename, join } from "node:path"
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path"
 import type {
   AppSettings,
   ClearContextRequest,
@@ -19,6 +19,7 @@ import type {
 import type { SettingsStore } from "./store.js"
 import { AuditLogger } from "./security/auditLogger.js"
 import { ConversationStore } from "./conversations/conversationStore.js"
+import { getRealProjectRoot, isSensitiveRelativePath } from "./security/pathGuard.js"
 import { TaskManager } from "./tasks/taskManager.js"
 import {
   beginDrag,
@@ -35,6 +36,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
   const taskManager = new TaskManager({
     settingsStore,
     auditLogger,
+    conversationStore,
   })
 
   app.on("browser-window-created", (_event, window) => {
@@ -97,6 +99,29 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     taskManager.revokeAllCapabilities()
     settingsStore.clearTrustedWorkspace()
     settingsStore.clearAuthorizedProjectPath()
+  })
+
+  ipcMain.handle("project:open-path", async (event, value: unknown): Promise<boolean> => {
+    assertTrustedSender(event.sender)
+    const request = parseOpenPathRequest(value)
+    const projectPath = settingsStore.getAuthorizedProjectPath()
+    if (!projectPath) throw new Error("尚未选择授权目录")
+    const root = getRealProjectRoot(projectPath)
+    const candidate = isAbsolute(request.path) ? request.path : resolve(root, request.path)
+    const target = realpathSync.native(candidate)
+    const targetRelative = relative(root, target)
+    if (
+      targetRelative === ".." ||
+      targetRelative.startsWith(`..${sep}`) ||
+      isAbsolute(targetRelative) ||
+      isSensitiveRelativePath(targetRelative) ||
+      !statSync(target).isFile()
+    ) {
+      throw new Error("日志路径不在授权项目的普通文件范围内")
+    }
+    const error = await shell.openPath(target)
+    if (error) throw new Error(error)
+    return true
   })
 
   ipcMain.handle("trusted-workspace:get", (event): TrustedWorkspace | null => {
@@ -207,7 +232,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
         conversationStore.recordTaskEvent(response.taskId, taskEvent)
         if (!sender.isDestroyed()) sender.send("pingo:task-event", taskEvent)
       },
-      { taskId: response.taskId },
+      { taskId: response.taskId, conversationId: request.conversationId },
     )
     return response
   })
@@ -301,6 +326,46 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     return taskManager.revokeCapability(value)
   })
 
+  ipcMain.handle("terminal-trust:list", (event) => {
+    assertTrustedSender(event.sender)
+    return taskManager.listTerminalTrust()
+  })
+
+  ipcMain.handle("terminal-trust:revoke-all", (event) => {
+    assertTrustedSender(event.sender)
+    taskManager.revokeAllTerminalTrust()
+  })
+
+  ipcMain.handle("terminal-runs:list", (event, value: unknown) => {
+    assertTrustedSender(event.sender)
+    const query = parseTerminalRunQuery(value)
+    return conversationStore.searchTerminalRuns(query.query, query.limit)
+  })
+
+  ipcMain.handle("terminal-runs:rerun", (event, value: unknown) => {
+    assertTrustedSender(event.sender)
+    if (typeof value !== "string" || value.length > 120) throw new TypeError("运行记录 ID 无效")
+    const sender = event.sender
+    return taskManager.rerunTerminalRun(String(sender.id), value, (taskEvent) => {
+      if (!sender.isDestroyed()) sender.send("pingo:task-event", taskEvent)
+    })
+  })
+
+  ipcMain.handle("terminal-runs:diff", (event, value: unknown) => {
+    assertTrustedSender(event.sender)
+    if (typeof value !== "object" || value === null) throw new TypeError("运行对比参数无效")
+    const candidate = value as { leftRunId?: unknown; rightRunId?: unknown }
+    if (
+      typeof candidate.leftRunId !== "string" ||
+      candidate.leftRunId.length > 120 ||
+      typeof candidate.rightRunId !== "string" ||
+      candidate.rightRunId.length > 120
+    ) {
+      throw new TypeError("运行对比参数无效")
+    }
+    return conversationStore.diffTerminalRuns(candidate.leftRunId, candidate.rightRunId)
+  })
+
   ipcMain.handle("audit:list", (event) => {
     assertTrustedSender(event.sender)
     return taskManager.getAuditHistory()
@@ -340,6 +405,47 @@ function parseMessages(value: unknown): ChatMessageInput[] | null {
   if (!Array.isArray(value) || value.length > 24) return null
   if (!value.every(isChatMessageInput)) return null
   return value
+}
+
+function parseOpenPathRequest(value: unknown): { path: string; line?: number; column?: number } {
+  if (typeof value !== "object" || value === null) throw new TypeError("打开路径参数无效")
+  const candidate = value as { path?: unknown; line?: unknown; column?: unknown }
+  if (
+    typeof candidate.path !== "string" ||
+    !candidate.path.trim() ||
+    candidate.path.length > 4_096 ||
+    (candidate.line !== undefined &&
+      (!Number.isSafeInteger(candidate.line) || (candidate.line as number) < 1)) ||
+    (candidate.column !== undefined &&
+      (!Number.isSafeInteger(candidate.column) || (candidate.column as number) < 1))
+  ) {
+    throw new TypeError("打开路径参数无效")
+  }
+  return {
+    path: candidate.path.trim(),
+    ...(candidate.line === undefined ? {} : { line: candidate.line as number }),
+    ...(candidate.column === undefined ? {} : { column: candidate.column as number }),
+  }
+}
+
+function parseTerminalRunQuery(value: unknown): { query: string; limit: number } {
+  if (value === undefined || value === null) return { query: "", limit: 50 }
+  if (typeof value !== "object") throw new TypeError("运行查询参数无效")
+  const candidate = value as { query?: unknown; limit?: unknown }
+  if (
+    (candidate.query !== undefined &&
+      (typeof candidate.query !== "string" || candidate.query.length > 200)) ||
+    (candidate.limit !== undefined &&
+      (!Number.isSafeInteger(candidate.limit) ||
+        (candidate.limit as number) < 1 ||
+        (candidate.limit as number) > 100))
+  ) {
+    throw new TypeError("运行查询参数无效")
+  }
+  return {
+    query: typeof candidate.query === "string" ? candidate.query : "",
+    limit: typeof candidate.limit === "number" ? candidate.limit : 50,
+  }
 }
 
 function parseConversationId(value: unknown): string {
@@ -446,14 +552,17 @@ function parseOperationDecision(value: unknown): OperationDecision {
     candidate.taskId.length > 120 ||
     typeof candidate.operationId !== "string" ||
     candidate.operationId.length > 120 ||
-    (candidate.decision !== "approve" && candidate.decision !== "deny")
+    !["approve", "deny", "trust"].includes(candidate.decision as string) ||
+    (candidate.reason !== undefined &&
+      (typeof candidate.reason !== "string" || candidate.reason.length > 240))
   ) {
     throw new TypeError("operation decision 参数无效")
   }
   return {
     taskId: candidate.taskId,
     operationId: candidate.operationId,
-    decision: candidate.decision,
+    decision: candidate.decision as OperationDecision["decision"],
+    ...(candidate.reason === undefined ? {} : { reason: candidate.reason.trim() }),
   }
 }
 

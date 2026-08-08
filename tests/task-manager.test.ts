@@ -6,7 +6,9 @@ import test from "node:test"
 import { AuditLogger } from "../src/main/security/auditLogger.js"
 import { TaskManager } from "../src/main/tasks/taskManager.js"
 import { SettingsStore } from "../src/main/store.js"
-import type { ChatStreamEvent } from "../src/shared/types.js"
+import { TerminalTrustManager } from "../src/main/security/terminalTrust.js"
+import { compileTerminalIntent } from "../src/main/terminal/intentPolicy.js"
+import type { ChatStreamEvent, TerminalRunRecord } from "../src/shared/types.js"
 
 test("task manager waits for permission before read tools and resumes after grant", async () => {
   const previousFetch = globalThis.fetch
@@ -246,6 +248,78 @@ test("terminal_intent uses the real approval, script binding, Seatbelt runner, a
     if (previousKey === undefined) delete process.env.MODEL_API_KEY
     else process.env.MODEL_API_KEY = previousKey
   }
+})
+
+test("Ledger rerun creates a new operation and always asks again even when trust exists", async () => {
+  const root = process.cwd()
+  const settings = new SettingsStore(join(mkdtempSync(join(tmpdir(), "pingo-rerun-")), "data"))
+  settings.setAuthorizedProjectPath(root)
+  const oldRecord: TerminalRunRecord = {
+    runId: "ledger-old",
+    operationId: "operation-old",
+    taskId: "task-old",
+    intentKind: "runtime.info",
+    intentAction: "node",
+    argv: ["--version"],
+    cwdRelative: ".",
+    planDigest: "a".repeat(64),
+    fingerprint: "安静 绿色 松鼠",
+    status: "completed",
+    exitCode: 0,
+    durationMs: 1,
+    outputBytes: 4,
+    outputRedacted: "v0",
+    truncated: false,
+    startedAt: Date.now() - 1_000,
+    finishedAt: Date.now() - 500,
+  }
+  const oldPlan = compileTerminalIntent(
+    { kind: "runtime.info", action: "node", cwd: "." },
+    {
+      taskId: oldRecord.taskId,
+      operationId: oldRecord.operationId,
+      sourceWindowId: "window-rerun",
+      projectRoot: root,
+    },
+  )
+  const trustManager = new TerminalTrustManager("rerun-session")
+  trustManager.grant(oldPlan, "window-rerun")
+  const storedRuns = {
+    getTerminalRun: (runId: string) => (runId === oldRecord.runId ? oldRecord : null),
+    recordTerminalRun: () => undefined,
+  }
+  const manager = new TaskManager({
+    settingsStore: settings,
+    auditLogger: new AuditLogger(
+      join(mkdtempSync(join(tmpdir(), "pingo-rerun-audit-")), "audit.jsonl"),
+    ),
+    terminalTrustManager: trustManager,
+    conversationStore: storedRuns,
+  })
+  const events: ChatStreamEvent[] = []
+  const rerun = manager.rerunTerminalRun("window-rerun", oldRecord.runId, (event) =>
+    events.push(event),
+  )
+  await waitFor(() => events.some((event) => event.type === "capability-request"))
+  manager.grantCapability("window-rerun", rerun.taskId, ["terminal.execute"], "session", [root])
+  await waitFor(() => events.some((event) => event.type === "approval-request"))
+  const approval = events.find(
+    (event): event is Extract<ChatStreamEvent, { type: "approval-request" }> =>
+      event.type === "approval-request",
+  )
+  assert.ok(approval)
+  assert.notEqual(approval.request.operationId, oldRecord.operationId)
+  manager.decide("window-rerun", {
+    taskId: rerun.taskId,
+    operationId: approval.request.operationId,
+    decision: "approve",
+  })
+  await waitFor(() =>
+    events.some(
+      (event) => event.type === "operation-result" && event.result.status === "completed",
+    ),
+  )
+  assert.equal(events.filter((event) => event.type === "approval-request").length, 1)
 })
 
 async function waitFor(predicate: () => boolean): Promise<void> {

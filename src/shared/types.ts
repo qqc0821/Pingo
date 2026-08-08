@@ -91,6 +91,7 @@ export type ChatStreamEvent =
   | { type: "start" }
   | { type: "chunk"; content: string }
   | { type: "tool"; name: string; detail: string }
+  | OperationProgressEvent
   | { type: "task-state"; taskId: string; state: TaskState }
   | { type: "capability-request"; taskId: string; capabilities: Capability[]; scopeRoots: string[] }
   | { type: "approval-request"; request: ApprovalRequest }
@@ -98,6 +99,16 @@ export type ChatStreamEvent =
   | { type: "done" }
   | { type: "cancelled" }
   | { type: "error"; message: string }
+
+export interface OperationProgressEvent {
+  type: "operation-progress"
+  operationId: string
+  taskId: string
+  stream: "stdout" | "stderr"
+  seq: number
+  content: string
+  truncatedSoFar: boolean
+}
 
 export type Capability =
   "workspace.read" | "workspace.write" | "terminal.execute" | "system.automation"
@@ -121,14 +132,64 @@ export type TerminalIntent =
     }
   | {
       kind: "project.script"
-      packageManager: "npm"
+      packageManager: "npm" | "auto"
       script: string
       forwardedArgs: string[]
       cwd: string
     }
+  | {
+      kind: "git.inspect"
+      action: "show" | "blame" | "stash list"
+      args: string[]
+      cwd: string
+    }
+  | {
+      kind: "runtime.info"
+      action: "node" | "npm"
+      cwd: string
+    }
+  | {
+      kind: "pkg.audit"
+      action: "ls" | "outdated"
+      packageManager: "auto"
+      cwd: string
+    }
+
+export type TerminalExecutableName = "git" | "npm" | "node" | "pnpm" | "yarn" | "bun"
+
+export type TerminalSandboxTier = "read-only" | "workspace-write" | "network-allowlist"
+
+export interface SlotSchema {
+  type: "string"
+  enum?: string[]
+  pattern?: string
+  maxLength?: number
+  path?: boolean
+}
+
+export interface ActionGrammar {
+  argv: string[]
+  slots: Record<string, SlotSchema>
+  allowedFlags: string[]
+  pathArgsAfterDoubleDash: boolean
+}
+
+export interface IntentPackDefinition {
+  kind: string
+  version: number
+  executable: TerminalExecutableName
+  packageManager?: "auto"
+  actions: Record<string, ActionGrammar>
+  sandboxTier: TerminalSandboxTier
+  effects: TerminalEffects
+  risk: "R1" | "R3"
+  limits?: Partial<TerminalLimits>
+  preservesColor?: boolean
+  enabled: boolean
+}
 
 export interface ExecutableIdentity {
-  displayName: "git" | "npm"
+  displayName: TerminalExecutableName
   realPath: string
   sha256: string
   device: number
@@ -146,6 +207,7 @@ export interface TerminalEffects {
 
 export interface TerminalSandboxSpec {
   profileVersion: number
+  tier: TerminalSandboxTier
   readRoots: string[]
   writeRoots: string[]
   protectedPaths: string[]
@@ -156,7 +218,10 @@ export interface TerminalSandboxSpec {
 
 export interface TerminalLimits {
   timeoutMs: number
+  /** 硬上限；保留 outputBytes 名称以兼容 V1 计划与测试调用方。 */
   outputBytes: number
+  /** 软上限；超过后折叠中间输出但继续运行。 */
+  softOutputBytes?: number
 }
 
 export interface ProjectScriptBinding {
@@ -209,6 +274,28 @@ export interface TerminalPolicyFailure {
   message: string
   retryable: boolean
   requiredAction?: "ask_user" | "change_approach" | "stop"
+}
+
+export interface TerminalRunRecord {
+  runId: string
+  operationId: string
+  taskId: string
+  conversationId?: string
+  intentKind: string
+  intentAction?: string
+  argv: string[]
+  cwdRelative: string
+  planDigest: string
+  fingerprint: string
+  status: OperationResult["status"]
+  exitCode?: number | null
+  policyCode?: TerminalPolicyCode
+  durationMs: number
+  outputBytes: number
+  outputRedacted: string
+  truncated: boolean
+  startedAt: number
+  finishedAt: number
 }
 
 export interface CapabilityGrant {
@@ -270,6 +357,23 @@ export interface ApprovalRequest {
   taskId: string
   plan: OperationPlan
   expiresAt: number
+  display?: ApprovalDisplay
+}
+
+export interface ApprovalDisplay {
+  riskBadge: {
+    level: "R1" | "R3" | "R4"
+    tier: TerminalSandboxTier
+    label: string
+  }
+  pathPreview: {
+    readRoots: string[]
+    writeRoots: string[]
+    protectedPaths: string[]
+  }
+  fingerprint: {
+    words: [string, string, string]
+  }
 }
 
 export interface ApprovalTokenBinding {
@@ -282,12 +386,28 @@ export interface ApprovalTokenBinding {
   consumedAt?: number
 }
 
-export type OperationDecisionValue = "approve" | "deny"
+export type OperationDecisionValue = "approve" | "deny" | "trust"
 
 export interface OperationDecision {
   taskId: string
   operationId: string
   decision: OperationDecisionValue
+  reason?: string
+}
+
+export interface TerminalTrustGrant {
+  trustId: string
+  kind: string
+  action: string
+  rootId: string
+  sourceWindowId: string
+  sessionId: string
+  createdAt: number
+  expiresAt: number
+  lastUsedAt: number
+  useCount: number
+  maxUses: number
+  revokedAt?: number
 }
 
 export interface OperationResult {
@@ -394,6 +514,7 @@ export interface PingoAPI {
     get: () => Promise<ProjectInfo | null>
     choose: () => Promise<ProjectInfo | null>
     revoke: () => Promise<void>
+    openPath: (path: string, line?: number, column?: number) => Promise<boolean>
   }
   trustedWorkspace: {
     get: () => Promise<TrustedWorkspace | null>
@@ -432,5 +553,17 @@ export interface PingoAPI {
   capabilities: {
     list: () => Promise<CapabilityGrant[]>
     revoke: (grantId: string) => Promise<boolean>
+  }
+  terminalTrust: {
+    list: () => Promise<TerminalTrustGrant[]>
+    revokeAll: () => Promise<void>
+  }
+  terminalRuns: {
+    list: (query?: string, limit?: number) => Promise<TerminalRunRecord[]>
+    rerun: (runId: string) => Promise<{ taskId: string }>
+    diff: (
+      leftRunId: string,
+      rightRunId: string,
+    ) => Promise<{ left: string; right: string; different: boolean } | null>
   }
 }

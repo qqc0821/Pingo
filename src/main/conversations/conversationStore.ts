@@ -16,11 +16,39 @@ import type {
   ConversationSummary,
   TaskState,
 } from "../../shared/types.js"
+import type { OperationResult, TerminalPolicyCode } from "../../shared/types.js"
+import { redactOutput } from "../terminal/streamRedactor.js"
 
 const DATABASE_FILE = "chat-history.sqlite"
 const MAX_CONTEXT_MESSAGES = 24
 const MAX_CONTEXT_CHARACTERS = 100_000
 type Row = Record<string, unknown>
+
+export interface TerminalRunLedgerInput {
+  runId: string
+  operationId: string
+  taskId: string
+  conversationId?: string
+  intentKind: string
+  intentAction?: string
+  argv: string[]
+  cwdRelative: string
+  planDigest: string
+  fingerprint: string
+  status: OperationResult["status"]
+  exitCode?: number | null
+  policyCode?: TerminalPolicyCode
+  durationMs: number
+  outputBytes: number
+  outputRedacted: string
+  truncated: boolean
+  startedAt: number
+  finishedAt: number
+}
+
+export interface TerminalRunLedgerRecord extends TerminalRunLedgerInput {
+  conversationId?: string
+}
 
 interface ConversationRow extends Row {
   conversation_id: string
@@ -45,6 +73,28 @@ interface ItemRow extends Row {
   detail: string | null
   created_at: number
   updated_at: number
+}
+
+interface TerminalRunRow extends Row {
+  run_id: string
+  operation_id: string
+  task_id: string
+  conversation_id: string | null
+  intent_kind: string
+  intent_action: string | null
+  argv_json: string
+  cwd_relative: string
+  plan_digest: string
+  fingerprint: string
+  status: string
+  exit_code: number | null
+  policy_code: string | null
+  duration_ms: number
+  output_bytes: number
+  output_redacted: string
+  truncated: number
+  started_at: number
+  finished_at: number
 }
 
 /** Main-process source of truth for user-visible conversation state. */
@@ -237,6 +287,7 @@ export class ConversationStore {
   }
 
   recordTaskEvent(runId: string, event: ChatStreamEvent): void {
+    if (event.type === "operation-progress") return
     this.transaction(() => {
       const run = this.db
         .prepare(
@@ -394,6 +445,87 @@ export class ConversationStore {
     }
   }
 
+  recordTerminalRun(input: TerminalRunLedgerInput): void {
+    const redacted = redactOutput(input.outputRedacted)
+    const redactedBytes = Buffer.byteLength(redacted, "utf8")
+    const outputRedacted = Buffer.from(redacted, "utf8").subarray(0, 256_000).toString("utf8")
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO terminal_runs
+            (run_id, operation_id, task_id, conversation_id, intent_kind, intent_action,
+             argv_json, cwd_relative, plan_digest, fingerprint, status, exit_code, policy_code,
+             duration_ms, output_bytes, output_redacted, truncated, started_at, finished_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.runId,
+          input.operationId,
+          input.taskId,
+          input.conversationId ?? null,
+          input.intentKind,
+          input.intentAction ?? null,
+          JSON.stringify(input.argv),
+          input.cwdRelative,
+          input.planDigest,
+          input.fingerprint,
+          input.status,
+          input.exitCode ?? null,
+          input.policyCode ?? null,
+          input.durationMs,
+          input.outputBytes,
+          outputRedacted,
+          input.truncated || redactedBytes > 256_000 ? 1 : 0,
+          input.startedAt,
+          input.finishedAt,
+        )
+      this.db
+        .prepare(`DELETE FROM terminal_runs WHERE finished_at < ?`)
+        .run(Date.now() - 30 * 24 * 60 * 60 * 1_000)
+      this.db
+        .prepare(
+          `DELETE FROM terminal_runs WHERE run_id IN
+             (SELECT run_id FROM terminal_runs ORDER BY finished_at DESC LIMIT -1 OFFSET 200)`,
+        )
+        .run()
+    })
+  }
+
+  getTerminalRun(runId: string): TerminalRunLedgerRecord | null {
+    const row = this.db.prepare(`SELECT * FROM terminal_runs WHERE run_id = ?`).get(runId) as
+      TerminalRunRow | undefined
+    return row ? this.toTerminalRun(row) : null
+  }
+
+  searchTerminalRuns(query = "", limit = 50): TerminalRunLedgerRecord[] {
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)))
+    const pattern = `%${query.trim()}%`
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM terminal_runs
+         WHERE intent_kind LIKE ? OR intent_action LIKE ? OR status LIKE ? OR output_redacted LIKE ?
+            OR CAST(finished_at AS TEXT) LIKE ?
+         ORDER BY finished_at DESC LIMIT ?`,
+        )
+        .all(pattern, pattern, pattern, pattern, pattern, safeLimit) as TerminalRunRow[]
+    ).map((row) => this.toTerminalRun(row))
+  }
+
+  diffTerminalRuns(
+    leftRunId: string,
+    rightRunId: string,
+  ): { left: string; right: string; different: boolean } | null {
+    const left = this.getTerminalRun(leftRunId)
+    const right = this.getTerminalRun(rightRunId)
+    if (!left || !right) return null
+    return {
+      left: left.outputRedacted,
+      right: right.outputRedacted,
+      different: left.outputRedacted !== right.outputRedacted,
+    }
+  }
+
   importLegacy(
     messages: Array<{ id: string; role: "user" | "assistant" | "error"; content: string }>,
   ): ConversationDetail | null {
@@ -503,6 +635,31 @@ export class ConversationStore {
         ON conversation_items(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS conversation_items_context_idx
         ON conversation_items(conversation_id, context_epoch_id, created_at);
+      CREATE TABLE IF NOT EXISTS terminal_runs (
+        run_id TEXT PRIMARY KEY,
+        operation_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        conversation_id TEXT,
+        intent_kind TEXT NOT NULL,
+        intent_action TEXT,
+        argv_json TEXT NOT NULL,
+        cwd_relative TEXT NOT NULL,
+        plan_digest TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        policy_code TEXT,
+        duration_ms INTEGER NOT NULL,
+        output_bytes INTEGER NOT NULL,
+        output_redacted TEXT NOT NULL,
+        truncated INTEGER NOT NULL,
+        started_at INTEGER NOT NULL,
+        finished_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS terminal_runs_finished_idx
+        ON terminal_runs(finished_at DESC);
+      CREATE INDEX IF NOT EXISTS terminal_runs_intent_idx
+        ON terminal_runs(intent_kind, intent_action, finished_at DESC);
       CREATE TABLE IF NOT EXISTS legacy_imports (
         migration_key TEXT PRIMARY KEY,
         conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id),
@@ -615,6 +772,39 @@ export class ConversationStore {
         input.now,
         input.now,
       )
+  }
+
+  private toTerminalRun(row: TerminalRunRow): TerminalRunLedgerRecord {
+    let argv: string[] = []
+    try {
+      const parsed: unknown = JSON.parse(row.argv_json)
+      if (Array.isArray(parsed) && parsed.every((value) => typeof value === "string")) {
+        argv = parsed
+      }
+    } catch {
+      argv = []
+    }
+    return {
+      runId: row.run_id,
+      operationId: row.operation_id,
+      taskId: row.task_id,
+      ...(row.conversation_id === null ? {} : { conversationId: row.conversation_id }),
+      intentKind: row.intent_kind,
+      ...(row.intent_action === null ? {} : { intentAction: row.intent_action }),
+      argv,
+      cwdRelative: row.cwd_relative,
+      planDigest: row.plan_digest,
+      fingerprint: row.fingerprint,
+      status: row.status as OperationResult["status"],
+      ...(row.exit_code === null ? {} : { exitCode: row.exit_code }),
+      ...(row.policy_code === null ? {} : { policyCode: row.policy_code as TerminalPolicyCode }),
+      durationMs: row.duration_ms,
+      outputBytes: row.output_bytes,
+      outputRedacted: row.output_redacted,
+      truncated: row.truncated === 1,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at,
+    }
   }
 
   private touchConversation(conversationId: string, title: string | undefined, now: number): void {

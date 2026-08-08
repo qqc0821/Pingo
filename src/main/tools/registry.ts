@@ -2,6 +2,10 @@ import { listFiles } from "./listFiles.js"
 import { readFile } from "./readFile.js"
 import { searchFiles } from "./searchFiles.js"
 import type { ToolDefinition, ToolExecution } from "./types.js"
+import {
+  buildTerminalIntentSchema,
+  getEnabledIntentPackDefinitions,
+} from "../terminal/intentPacks.js"
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -136,22 +140,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "terminal_intent",
-      description:
-        "提出受限 TerminalIntent。只能使用 git.read(status/diff/log) 或 project.script(lint/typecheck/format:check/test/build)；executable、argv、环境、风险和沙箱由 Pingo 主进程决定。每条命令都要用户运行一次确认。",
-      parameters: {
-        type: "object",
-        properties: {
-          kind: { type: "string", enum: ["git.read", "project.script"] },
-          action: { type: "string", enum: ["status", "diff", "log"] },
-          args: { type: "array", items: { type: "string" } },
-          packageManager: { type: "string", enum: ["npm"] },
-          script: { type: "string", enum: ["lint", "typecheck", "format:check", "test", "build"] },
-          forwardedArgs: { type: "array", items: { type: "string" } },
-          cwd: { type: "string", description: "workspace 内相对工作目录" },
-        },
-        required: ["kind", "cwd"],
-        additionalProperties: false,
-      },
+      description: `提出受限 TerminalIntent。可用清单：${getEnabledIntentPackDefinitions()
+        .map((definition) => definition.kind)
+        .join(
+          "、",
+        )}；executable、argv、环境、风险和沙箱由 Pingo 主进程决定。每条命令都要用户运行一次确认。`,
+      parameters: buildTerminalIntentSchema(),
     },
   },
 ]

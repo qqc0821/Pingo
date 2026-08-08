@@ -6,6 +6,7 @@ import type {
   MouseEvent,
   PointerEvent,
   ReactElement,
+  ReactNode,
 } from "react"
 import petGentleImage from "../../assets/pet-gentle.png"
 import petImage from "../../assets/pet.png"
@@ -24,6 +25,8 @@ import type {
   OperationResult,
   PetState,
   TaskState,
+  TerminalRunRecord,
+  TerminalTrustGrant,
   TrustedWorkspace,
   UserPreferences,
 } from "../../shared/types.js"
@@ -42,6 +45,15 @@ interface PendingPermission {
   taskId: string
   capabilities: Capability[]
   scopeRoots: string[]
+}
+
+interface OperationLogEntry {
+  id: string
+  operationId: string
+  taskId: string
+  stream: "stdout" | "stderr"
+  content: string
+  truncatedSoFar: boolean
 }
 
 const LEGACY_STORAGE_KEY = "pingo:task-messages"
@@ -103,6 +115,14 @@ export function App(): ReactElement {
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [settingsNotice, setSettingsNotice] = useState("")
   const [grants, setGrants] = useState<CapabilityGrant[]>([])
+  const [terminalTrust, setTerminalTrust] = useState<TerminalTrustGrant[]>([])
+  const [terminalRuns, setTerminalRuns] = useState<TerminalRunRecord[]>([])
+  const [terminalRunQuery, setTerminalRunQuery] = useState("")
+  const [terminalRunDiff, setTerminalRunDiff] = useState<{
+    left: string
+    right: string
+    different: boolean
+  } | null>(null)
   const [trustedWorkspace, setTrustedWorkspace] = useState<TrustedWorkspace | null>(null)
   const [trustedWorkspaceBusy, setTrustedWorkspaceBusy] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
@@ -118,8 +138,11 @@ export function App(): ReactElement {
   const [taskState, setTaskState] = useState<TaskState | "ready">("ready")
   const [notice, setNotice] = useState("提出任务，Pingo 会在需要时先请求授权。")
   const [toolActivity, setToolActivity] = useState("")
+  const [operationLogs, setOperationLogs] = useState<OperationLogEntry[]>([])
+  const [logsPaused, setLogsPaused] = useState(false)
   const [permission, setPermission] = useState<PendingPermission | null>(null)
   const [approvals, setApprovals] = useState<Record<string, ApprovalRequest>>({})
+  const [approvalReasons, setApprovalReasons] = useState<Record<string, string>>({})
   const [lastResult, setLastResult] = useState<OperationResult | null>(null)
   const [permissionBusy, setPermissionBusy] = useState(false)
   const [approvalNow, setApprovalNow] = useState(() => Date.now())
@@ -128,6 +151,7 @@ export function App(): ReactElement {
   )
   const assistantId = useRef<string | null>(null)
   const messagesEnd = useRef<HTMLDivElement>(null)
+  const operationLogsEnd = useRef<HTMLDivElement>(null)
   const petStateTimer = useRef<number | null>(null)
   const currentPetState = PET_STATE_CONFIG[petState]
   const approvalList = Object.values(approvals)
@@ -178,6 +202,10 @@ export function App(): ReactElement {
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
+
+  useEffect(() => {
+    if (!logsPaused) operationLogsEnd.current?.scrollIntoView({ behavior: "smooth" })
+  }, [logsPaused, operationLogs])
 
   useEffect(() => {
     return () => {
@@ -274,15 +302,19 @@ export function App(): ReactElement {
     setSettingsNotice("")
     void window.pingo.pet.setExpanded(true)
     try {
-      const [current, currentGrants, currentAudit] = await Promise.all([
+      const [current, currentGrants, currentTrust, currentAudit, currentRuns] = await Promise.all([
         window.pingo.settings.get(),
         window.pingo.capabilities.list(),
+        window.pingo.terminalTrust.list(),
         window.pingo.audit.list(),
+        window.pingo.terminalRuns.list(),
       ])
       const currentTrustedWorkspace = await window.pingo.trustedWorkspace.get()
       setSettings(current)
       setSettingsDraft(current)
       setGrants(currentGrants)
+      setTerminalTrust(currentTrust)
+      setTerminalRuns(currentRuns)
       setAuditRecords(currentAudit)
       setTrustedWorkspace(currentTrustedWorkspace)
     } catch {
@@ -352,6 +384,20 @@ export function App(): ReactElement {
         showPetState("thinking")
         return
       }
+      if (event.type === "operation-progress") {
+        setOperationLogs((current) => [
+          ...current,
+          {
+            id: `${event.operationId}-${event.seq}`,
+            operationId: event.operationId,
+            taskId: event.taskId,
+            stream: event.stream,
+            content: event.content,
+            truncatedSoFar: event.truncatedSoFar,
+          },
+        ])
+        return
+      }
       if (event.type === "task-state") {
         setTaskState(event.state)
         if (event.state === "awaiting_permission") {
@@ -362,10 +408,10 @@ export function App(): ReactElement {
           showPetState("worried")
         } else if (event.state === "executing") {
           setNotice("正在执行已确认操作")
-          showPetState("thinking")
+          showPetState("focus")
         } else if (event.state === "completed") {
           setNotice("任务完成")
-          showPetState("celebrate", HAPPY_STATE_DURATION_MS)
+          showPetState("nod", HAPPY_STATE_DURATION_MS)
           void refreshConversation()
         } else if (event.state === "cancelled") {
           setNotice("任务已取消")
@@ -533,6 +579,8 @@ export function App(): ReactElement {
       setTaskState("ready")
       setNotice("已新建对话。")
       setToolActivity("")
+      setOperationLogs([])
+      setLogsPaused(false)
       setPermission(null)
       setApprovals({})
       setLastResult(null)
@@ -558,6 +606,8 @@ export function App(): ReactElement {
           setPermission(null)
           setApprovals({})
           setLastResult(null)
+          setOperationLogs([])
+          setLogsPaused(false)
           applyConversation(nextConversation)
         }
       } catch {
@@ -618,6 +668,8 @@ export function App(): ReactElement {
       setApprovals({})
       setPermission(null)
       setLastResult(null)
+      setOperationLogs([])
+      setLogsPaused(false)
       setTaskState("proposed")
       setNotice("正在提交任务…")
       try {
@@ -680,18 +732,25 @@ export function App(): ReactElement {
 
   const decideApproval = useCallback(
     async (approval: ApprovalRequest, decision: OperationDecision["decision"]) => {
+      const reason = approvalReasons[approval.operationId]?.trim()
       await window.pingo.task.decide({
         taskId: approval.taskId,
         operationId: approval.operationId,
         decision,
+        ...(reason ? { reason } : {}),
       })
       setApprovals((current) => {
         const next = { ...current }
         delete next[approval.operationId]
         return next
       })
+      setApprovalReasons((current) => {
+        const next = { ...current }
+        delete next[approval.operationId]
+        return next
+      })
     },
-    [],
+    [approvalReasons],
   )
 
   const copyApprovalCommand = useCallback(async (request: ApprovalRequest) => {
@@ -704,6 +763,23 @@ export function App(): ReactElement {
       setNotice("已复制真实命令（不会执行）")
     } catch {
       setNotice("复制失败，请手动选择预览中的命令")
+    }
+  }, [])
+
+  const copyOperationLogs = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(operationLogs.map((entry) => entry.content).join(""))
+      setNotice("已复制终端日志")
+    } catch {
+      setNotice("日志复制失败，请重试")
+    }
+  }, [operationLogs])
+
+  const openLogLocation = useCallback(async (path: string, line: number, column?: number) => {
+    try {
+      await window.pingo.project.openPath(path, line, column)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "文件路径不在授权目录内")
     }
   }, [])
 
@@ -733,6 +809,32 @@ export function App(): ReactElement {
     await window.pingo.capabilities.revoke(grantId)
     setGrants(await window.pingo.capabilities.list())
     setSettingsNotice("授权已撤销，关联任务已停止。")
+  }, [])
+
+  const revokeAllTerminalTrust = useCallback(async () => {
+    await window.pingo.terminalTrust.revokeAll()
+    setTerminalTrust([])
+    setSettingsNotice("已撤销所有 Terminal 同类信任，后续会恢复逐次确认。")
+  }, [])
+
+  const searchTerminalRuns = useCallback(async (query: string) => {
+    setTerminalRunQuery(query)
+    setTerminalRuns(await window.pingo.terminalRuns.list(query))
+  }, [])
+
+  const rerunTerminalRun = useCallback(async (runId: string) => {
+    try {
+      await window.pingo.terminalRuns.rerun(runId)
+      setSettingsOpen(false)
+      setExpanded(true)
+      setNotice("历史命令已重新提交，请检查新的确认卡")
+    } catch (error) {
+      setSettingsNotice(error instanceof Error ? error.message : "历史命令重跑失败")
+    }
+  }, [])
+
+  const diffTerminalRuns = useCallback(async (leftRunId: string, rightRunId: string) => {
+    setTerminalRunDiff(await window.pingo.terminalRuns.diff(leftRunId, rightRunId))
   }, [])
 
   return (
@@ -805,6 +907,10 @@ export function App(): ReactElement {
               notice={settingsNotice}
               grants={grants}
               auditRecords={auditRecords}
+              terminalTrust={terminalTrust}
+              terminalRuns={terminalRuns}
+              terminalRunQuery={terminalRunQuery}
+              terminalRunDiff={terminalRunDiff}
               trustedWorkspace={trustedWorkspace}
               trustedWorkspaceBusy={trustedWorkspaceBusy}
               setDraft={setSettingsDraft}
@@ -813,6 +919,10 @@ export function App(): ReactElement {
               disableTrustedWorkspace={disableTrustedWorkspace}
               forgetTrustedWorkspace={forgetTrustedWorkspace}
               revokeGrant={revokeGrant}
+              revokeAllTerminalTrust={revokeAllTerminalTrust}
+              searchTerminalRuns={searchTerminalRuns}
+              rerunTerminalRun={rerunTerminalRun}
+              diffTerminalRuns={diffTerminalRuns}
             />
           ) : (
             <>
@@ -896,6 +1006,52 @@ export function App(): ReactElement {
                 ))}
                 <div ref={messagesEnd} />
               </div>
+              {operationLogs.length > 0 && (
+                <section className="operation-log-card" aria-label="终端实时日志">
+                  <div className="operation-log-header">
+                    <strong>
+                      终端实时日志
+                      {operationLogs.some((entry) => entry.truncatedSoFar) && " · 中间输出已折叠"}
+                    </strong>
+                    <div className="operation-log-actions">
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        onClick={() => setLogsPaused((current) => !current)}
+                      >
+                        {logsPaused ? "继续滚动" : "暂停滚动"}
+                      </button>
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        onClick={() => void copyOperationLogs()}
+                      >
+                        复制
+                      </button>
+                    </div>
+                  </div>
+                  <div className="operation-log" aria-live="polite">
+                    {operationLogs.map((entry) => (
+                      <div
+                        className={`operation-log-line operation-log-line--${entry.stream}`}
+                        key={entry.id}
+                      >
+                        <span className="operation-log-stream">
+                          {entry.stream === "stdout" ? "out" : "err"}
+                        </span>
+                        <AnsiLogText text={entry.content} onOpenPath={openLogLocation} />
+                      </div>
+                    ))}
+                    <div ref={operationLogsEnd} />
+                  </div>
+                </section>
+              )}
+              {lastResult?.content && (
+                <section className="operation-result-card" aria-label="操作结果">
+                  <strong>操作结果</strong>
+                  <pre>{lastResult.content}</pre>
+                </section>
+              )}
               {permission && (
                 <div
                   className="action-card permission-card"
@@ -963,6 +1119,7 @@ export function App(): ReactElement {
                             代码执行：{terminalPlan.effects.projectCodeExecution ? "是" : "否"}
                           </span>
                           <span>文件范围：workspace {terminalPlan.effects.workspace}</span>
+                          <span>沙箱档位：{terminalPlan.sandbox.tier}</span>
                           <span>网络：关闭（公网、localhost、私网、Unix socket）</span>
                           <span>HOME/密钥/目录外：不可用</span>
                           <span>
@@ -991,6 +1148,34 @@ export function App(): ReactElement {
                       {(terminalPlan?.planDigest ?? approval.plan.digest).slice(0, 12)}… ·{" "}
                       {expired ? "已过期，请重新规划" : `${remainingSeconds}s 后过期`}
                     </p>
+                    {approval.display && (
+                      <div className="approval-impact">
+                        <span>
+                          人类指纹：{approval.display.fingerprint.words.join(" · ")} · 沙箱：
+                          {approval.display.riskBadge.label}
+                        </span>
+                        <span>
+                          读取根：{approval.display.pathPreview.readRoots.join("、") || "无"}
+                        </span>
+                        <span>
+                          写入根：{approval.display.pathPreview.writeRoots.join("、") || "无"}
+                        </span>
+                      </div>
+                    )}
+                    <label className="approval-reason">
+                      <span>拒绝理由（可选）</span>
+                      <input
+                        value={approvalReasons[approval.operationId] ?? ""}
+                        maxLength={240}
+                        placeholder="例如：范围太大，改为只检查一个文件"
+                        onChange={(event) =>
+                          setApprovalReasons((current) => ({
+                            ...current,
+                            [approval.operationId]: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
                     <div className="action-buttons">
                       <button
                         type="button"
@@ -1007,6 +1192,16 @@ export function App(): ReactElement {
                       >
                         拒绝
                       </button>
+                      {terminalPlan?.sandbox.tier === "read-only" && terminalPlan.risk === "R1" && (
+                        <button
+                          type="button"
+                          className="button-secondary"
+                          disabled={expired}
+                          onClick={() => void decideApproval(approval, "trust")}
+                        >
+                          本会话允许同类
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="button-secondary"
@@ -1112,6 +1307,117 @@ export function App(): ReactElement {
   )
 }
 
+interface AnsiStyle {
+  bold: boolean
+  color?: string
+}
+
+const ANSI_COLORS: Record<number, string> = {
+  30: "#4b5563",
+  31: "#dc2626",
+  32: "#16a34a",
+  33: "#ca8a04",
+  34: "#2563eb",
+  35: "#9333ea",
+  36: "#0891b2",
+  37: "#374151",
+}
+
+function AnsiLogText({
+  text,
+  onOpenPath,
+}: {
+  text: string
+  onOpenPath: (path: string, line: number, column?: number) => Promise<void>
+}): ReactElement {
+  const segments = parseAnsiSegments(text)
+  return (
+    <span className="operation-log-content">
+      {segments.map((segment, index) => (
+        <span
+          key={`${segment.text}-${index}`}
+          style={{ color: segment.style.color, fontWeight: segment.style.bold ? 700 : 400 }}
+        >
+          {renderLogLocations(segment.text, onOpenPath, `${index}`)}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+function parseAnsiSegments(text: string): Array<{ text: string; style: AnsiStyle }> {
+  const escape = String.fromCharCode(27)
+  const bell = String.fromCharCode(7)
+  const sanitized = text
+    .replace(new RegExp(`${escape}\\][^${bell}]*(?:${bell}|${escape}\\\\)`, "g"), "")
+    .replace(new RegExp(`${escape}\\[[0-?]*[ -/]*[@-~]`, "g"), (sequence) =>
+      sequence.endsWith("m") ? sequence : "",
+    )
+  const pattern = new RegExp(`${escape}\\[([0-9;]*)m`, "g")
+  const segments: Array<{ text: string; style: AnsiStyle }> = []
+  let style: AnsiStyle = { bold: false }
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(sanitized))) {
+    const currentMatch = match
+    if (currentMatch.index > cursor)
+      segments.push({ text: sanitized.slice(cursor, currentMatch.index), style })
+    style = applyAnsiCodes(style, currentMatch[1] ?? "0")
+    cursor = pattern.lastIndex
+  }
+  if (cursor < sanitized.length) segments.push({ text: sanitized.slice(cursor), style })
+  return segments
+}
+
+function applyAnsiCodes(style: AnsiStyle, codes: string): AnsiStyle {
+  let next = { ...style }
+  for (const rawCode of codes.split(";")) {
+    const code = Number(rawCode || 0)
+    if (code === 0) next = { bold: false }
+    else if (code === 1) next.bold = true
+    else if (code === 22) next.bold = false
+    else if (code === 39) delete next.color
+    else if (ANSI_COLORS[code]) next.color = ANSI_COLORS[code]
+  }
+  return next
+}
+
+function renderLogLocations(
+  text: string,
+  onOpenPath: (path: string, line: number, column?: number) => Promise<void>,
+  keyPrefix: string,
+): ReactNode {
+  const pattern = /((?:\/|\.\/|(?:[\w.-]+\/)+)[^\s():]+):(\d+)(?::(\d+))?/g
+  const parts: ReactNode[] = []
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(text))) {
+    const currentMatch = match
+    const path = (currentMatch[1] ?? "").replace(/[),.;]+$/, "")
+    if (!path) continue
+    const matchStart = currentMatch.index
+    const matchText = currentMatch[0]
+    const line = Number(currentMatch[2])
+    const column = currentMatch[3] === undefined ? undefined : Number(currentMatch[3])
+    const pathLength = path.length
+    if (matchStart > cursor) parts.push(text.slice(cursor, matchStart))
+    parts.push(
+      <button
+        className="operation-log-link"
+        key={`${keyPrefix}-${matchStart}`}
+        type="button"
+        onClick={() => void onOpenPath(path, line, column)}
+      >
+        {matchText.slice(0, pathLength)}
+      </button>,
+    )
+    if (matchText.length > pathLength) parts.push(matchText.slice(pathLength))
+    cursor = matchStart + matchText.length
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor))
+  return parts.length ? parts : text
+}
+
 function SettingsView({
   settings,
   draft,
@@ -1119,6 +1425,10 @@ function SettingsView({
   notice,
   grants,
   auditRecords,
+  terminalTrust,
+  terminalRuns,
+  terminalRunQuery,
+  terminalRunDiff,
   trustedWorkspace,
   trustedWorkspaceBusy,
   setDraft,
@@ -1127,6 +1437,10 @@ function SettingsView({
   disableTrustedWorkspace,
   forgetTrustedWorkspace,
   revokeGrant,
+  revokeAllTerminalTrust,
+  searchTerminalRuns,
+  rerunTerminalRun,
+  diffTerminalRuns,
 }: {
   settings: AppSettings | null
   draft: UserPreferences | null
@@ -1134,6 +1448,10 @@ function SettingsView({
   notice: string
   grants: CapabilityGrant[]
   auditRecords: AuditRecord[]
+  terminalTrust: TerminalTrustGrant[]
+  terminalRuns: TerminalRunRecord[]
+  terminalRunQuery: string
+  terminalRunDiff: { left: string; right: string; different: boolean } | null
   trustedWorkspace: TrustedWorkspace | null
   trustedWorkspaceBusy: boolean
   setDraft: React.Dispatch<React.SetStateAction<UserPreferences | null>>
@@ -1142,6 +1460,10 @@ function SettingsView({
   disableTrustedWorkspace: () => Promise<void>
   forgetTrustedWorkspace: () => Promise<void>
   revokeGrant: (grantId: string) => Promise<void>
+  revokeAllTerminalTrust: () => Promise<void>
+  searchTerminalRuns: (query: string) => Promise<void>
+  rerunTerminalRun: (runId: string) => Promise<void>
+  diffTerminalRuns: (leftRunId: string, rightRunId: string) => Promise<void>
 }): ReactElement {
   if (!draft)
     return (
@@ -1253,6 +1575,24 @@ function SettingsView({
           )}
         </div>
         <div className="settings-section">
+          <strong>Terminal 同类信任</strong>
+          {terminalTrust.length === 0 ? (
+            <span>没有已积累的只读信任</span>
+          ) : (
+            <>
+              {terminalTrust.map((grant) => (
+                <span className="audit-row" key={grant.trustId}>
+                  {grant.kind}/{grant.action || "*"} · 已用 {grant.useCount}/{grant.maxUses} ·{" "}
+                  {Math.max(0, Math.ceil((grant.expiresAt - Date.now()) / 60_000))} 分钟后失效
+                </span>
+              ))}
+              <button type="button" onClick={() => void revokeAllTerminalTrust()}>
+                一键撤销全部 Terminal 信任
+              </button>
+            </>
+          )}
+        </div>
+        <div className="settings-section">
           <strong>操作历史</strong>
           {auditRecords.length === 0 ? (
             <span>暂无记录</span>
@@ -1266,6 +1606,59 @@ function SettingsView({
                   {new Date(record.createdAt).toLocaleTimeString()}
                 </span>
               ))
+          )}
+        </div>
+        <div className="settings-section">
+          <strong>Terminal 运行台账</strong>
+          <input
+            value={terminalRunQuery}
+            placeholder="按意图、状态或输出搜索"
+            onChange={(event) => void searchTerminalRuns(event.target.value)}
+          />
+          {terminalRuns.length === 0 ? (
+            <span>暂无匹配的终端运行记录</span>
+          ) : (
+            terminalRuns.slice(0, 8).map((run) => {
+              const comparison = terminalRuns.find(
+                (candidate) =>
+                  candidate.runId !== run.runId && candidate.planDigest === run.planDigest,
+              )
+              return (
+                <div className="terminal-run-row" key={run.runId}>
+                  <span>
+                    {run.intentKind}/{run.intentAction || "*"} · {run.status} · {run.fingerprint}
+                  </span>
+                  <small>
+                    {new Date(run.finishedAt).toLocaleString()} · {run.outputBytes} bytes
+                    {run.truncated ? " · 已截断" : ""}
+                  </small>
+                  <code>{run.outputRedacted.slice(0, 240)}</code>
+                  <div className="grant-row">
+                    <button type="button" onClick={() => void rerunTerminalRun(run.runId)}>
+                      重跑（重新确认）
+                    </button>
+                    {comparison && (
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        onClick={() => void diffTerminalRuns(run.runId, comparison.runId)}
+                      >
+                        对比同计划
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })
+          )}
+          {terminalRunDiff && (
+            <pre className="terminal-run-diff">
+              {terminalRunDiff.different ? "两次输出不同" : "两次输出相同"}
+              {"\n\n本次：\n"}
+              {terminalRunDiff.left}
+              {"\n\n对比：\n"}
+              {terminalRunDiff.right}
+            </pre>
           )}
         </div>
         <label className="range-setting">

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 import { ConversationStore } from "../src/main/conversations/conversationStore.js"
+import type { TerminalRunLedgerInput } from "../src/main/conversations/conversationStore.js"
 
 function createStore(): ConversationStore {
   return new ConversationStore(mkdtempSync(join(tmpdir(), "pingo-conversations-")))
@@ -148,6 +149,92 @@ test("client request retry returns the existing run without starting a second tu
     assert.equal(retry.started, false)
     assert.equal(retry.taskId, first.taskId)
     assert.equal(retry.conversation.items.filter((item) => item.kind === "message").length, 2)
+  } finally {
+    store.close()
+  }
+})
+
+test("operation progress is not persisted as a conversation item or revision", () => {
+  const store = createStore()
+  try {
+    const conversation = store.create()
+    const submitted = store.submit({
+      conversationId: conversation.conversationId,
+      clientRequestId: "request-progress-only",
+      expectedRevision: conversation.revision,
+      expectedContextEpochId: conversation.activeContextEpochId,
+      content: "观察终端输出",
+    })
+    const before = store.get(conversation.conversationId)
+    assert.ok(before)
+    store.recordTaskEvent(submitted.taskId, {
+      type: "operation-progress",
+      operationId: "operation-progress-only",
+      taskId: submitted.taskId,
+      stream: "stdout",
+      seq: 0,
+      content: "safe live output",
+      truncatedSoFar: false,
+    })
+    const after = store.get(conversation.conversationId)
+    assert.equal(after?.revision, before.revision)
+    assert.equal(after?.items.length, before.items.length)
+  } finally {
+    store.close()
+  }
+})
+
+test("terminal run ledger redacts output, diffs records, and keeps the newest 200 rows", () => {
+  const store = createStore()
+  try {
+    const base: TerminalRunLedgerInput = {
+      runId: "run-base",
+      operationId: "operation-base",
+      taskId: "task-base",
+      intentKind: "git.read",
+      intentAction: "status",
+      argv: ["--no-pager", "status"],
+      cwdRelative: ".",
+      planDigest: "a".repeat(64),
+      fingerprint: "安静 绿色 松鼠",
+      status: "completed",
+      exitCode: 0,
+      durationMs: 4,
+      outputBytes: 24,
+      outputRedacted: "first output",
+      truncated: false,
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
+    }
+    for (let index = 0; index < 205; index += 1) {
+      store.recordTerminalRun({
+        ...base,
+        runId: `run-${index}`,
+        operationId: `operation-${index}`,
+        outputRedacted:
+          index === 204 ? `api_key=secret-${index}\n${"x".repeat(300_000)}` : `output-${index}`,
+        truncated: index === 204,
+        finishedAt: base.finishedAt + index,
+      })
+    }
+    assert.equal(store.getTerminalRun("run-0"), null)
+    assert.ok(store.getTerminalRun("run-204"))
+    const latest = store.getTerminalRun("run-204")
+    assert.ok(latest)
+    assert.equal(latest.truncated, true)
+    assert.ok(latest.outputRedacted.length <= 256_000)
+    assert.doesNotMatch(latest.outputRedacted, /secret-204/)
+
+    store.recordTerminalRun({
+      ...base,
+      runId: "run-diff",
+      operationId: "operation-diff",
+      outputRedacted: "different output",
+      finishedAt: base.finishedAt + 206,
+    })
+    const diff = store.diffTerminalRuns("run-204", "run-diff")
+    assert.equal(diff?.different, true)
+    assert.equal(diff?.right, "different output")
   } finally {
     store.close()
   }

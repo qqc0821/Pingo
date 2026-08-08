@@ -5,7 +5,14 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 import { compileTerminalIntent, revalidateTerminalPlan } from "../src/main/terminal/intentPolicy.js"
+import { readableFingerprint } from "../src/main/tasks/taskManager.js"
+import { detectSandboxDenial, TERMINAL_POLICY_CATALOG } from "../src/main/terminal/policyCatalog.js"
 import { TerminalRunner } from "../src/main/terminal/runner.js"
+import {
+  TERMINAL_TRUST_DECAY_MS,
+  TERMINAL_TRUST_MAX_USES,
+  TerminalTrustManager,
+} from "../src/main/security/terminalTrust.js"
 
 test("structured intents resolve executable identity, script body/hash, effects, and sandbox spec", () => {
   const root = mkdtempSync(join(tmpdir(), "pingo-plan-"))
@@ -114,6 +121,136 @@ test("legacy shell, interpreter, privilege, delete, install, download, and remot
       }),
     )
   }
+})
+
+test("new read-only intent packs compile with read-only sandbox and reject path/flag escapes", async () => {
+  const root = process.cwd()
+  const show = compileTerminalIntent(
+    { kind: "git.inspect", action: "show", args: ["HEAD", "--", "package.json"], cwd: "." },
+    {
+      taskId: "task-inspect",
+      operationId: "op-inspect",
+      sourceWindowId: "window",
+      projectRoot: root,
+    },
+  )
+  assert.deepEqual(show.argv, ["--no-pager", "show", "HEAD", "--", "package.json"])
+  assert.equal(show.sandbox.tier, "read-only")
+  assert.equal(show.effects.workspace, "read")
+
+  const runtime = compileTerminalIntent(
+    { kind: "runtime.info", action: "node", cwd: "." },
+    {
+      taskId: "task-runtime",
+      operationId: "op-runtime",
+      sourceWindowId: "window",
+      projectRoot: root,
+    },
+  )
+  assert.equal(runtime.executable.displayName, "node")
+  assert.deepEqual(runtime.argv, ["--version"])
+  assert.equal(runtime.sandbox.network, "deny")
+
+  const audit = compileTerminalIntent(
+    { kind: "pkg.audit", action: "ls", packageManager: "auto", cwd: "." },
+    { taskId: "task-audit", operationId: "op-audit", sourceWindowId: "window", projectRoot: root },
+  )
+  assert.equal(audit.executable.displayName, "npm")
+  assert.deepEqual(audit.argv, ["ls", "--depth=0", "--offline"])
+  assert.equal(audit.sandbox.tier, "read-only")
+
+  assert.throws(() =>
+    compileTerminalIntent(
+      { kind: "git.inspect", action: "show", args: ["--output=/tmp/out"], cwd: "." },
+      {
+        taskId: "task-escape",
+        operationId: "op-escape",
+        sourceWindowId: "window",
+        projectRoot: root,
+      },
+    ),
+  )
+  assert.throws(() =>
+    compileTerminalIntent(
+      { kind: "git.inspect", action: "blame", args: ["package.json"], cwd: "." },
+      { taskId: "task-path", operationId: "op-path", sourceWindowId: "window", projectRoot: root },
+    ),
+  )
+
+  const result = await new TerminalRunner().run(runtime)
+  assert.equal(result.exitCode, 0)
+  assert.match(result.content, /^v\d+/)
+})
+
+test("session trust is limited to read-only R1, decays, caps at 20 uses, and is revocable", () => {
+  const root = process.cwd()
+  const readPlan = compileTerminalIntent(
+    { kind: "git.read", action: "status", args: [], cwd: "." },
+    { taskId: "task-trust", operationId: "op-trust", sourceWindowId: "window", projectRoot: root },
+  )
+  const scriptPlan = compileTerminalIntent(
+    { kind: "project.script", packageManager: "npm", script: "test", forwardedArgs: [], cwd: "." },
+    {
+      taskId: "task-script-trust",
+      operationId: "op-script-trust",
+      sourceWindowId: "window",
+      projectRoot: root,
+    },
+  )
+  const manager = new TerminalTrustManager("session-trust")
+  const now = Date.now()
+  assert.throws(() => manager.grant(scriptPlan, "window", now), /read-only|R1/)
+  manager.grant(readPlan, "window", now)
+  for (let count = 0; count < TERMINAL_TRUST_MAX_USES; count += 1) {
+    assert.equal(manager.consumeIfAllowed(readPlan, "window", now + count), true)
+  }
+  assert.equal(
+    manager.consumeIfAllowed(readPlan, "window", now + TERMINAL_TRUST_MAX_USES + 1),
+    false,
+  )
+
+  const freshManager = new TerminalTrustManager("session-trust-fresh")
+  freshManager.grant(readPlan, "window", now)
+  assert.equal(
+    freshManager.consumeIfAllowed(readPlan, "window", now + TERMINAL_TRUST_DECAY_MS + 1),
+    false,
+  )
+  freshManager.grant(readPlan, "window", now)
+  assert.equal(freshManager.list(now).length, 1)
+  freshManager.revokeAll(now)
+  assert.deepEqual(freshManager.list(now), [])
+})
+
+test("readable fingerprint collisions never replace the full plan digest", () => {
+  const leftDigest = "0".repeat(64)
+  const rightDigest = "0".repeat(24) + "f".repeat(40)
+  assert.notEqual(leftDigest, rightDigest)
+  assert.deepEqual(readableFingerprint(leftDigest), readableFingerprint(rightDigest))
+})
+
+test("terminal policy catalog is exhaustive and explains Seatbelt denials", () => {
+  const codes = [
+    "user_denied",
+    "approval_expired",
+    "sandbox_unavailable",
+    "sandbox_denied_fs",
+    "sandbox_denied_network",
+    "plan_changed",
+    "script_changed",
+    "executable_changed",
+    "command_forbidden",
+    "timed_out",
+    "cancelled",
+    "output_limit_exceeded",
+  ] as const
+  assert.deepEqual(Object.keys(TERMINAL_POLICY_CATALOG).sort(), [...codes].sort())
+  const filesystem = detectSandboxDenial(
+    `sandbox-exec: deny(1) file-write-data "/private/tmp/pingo-secret.txt"`,
+  )
+  assert.equal(filesystem?.code, "sandbox_denied_fs")
+  assert.match(filesystem?.message ?? "", /pingo-secret\.txt/)
+  const network = detectSandboxDenial("sandbox-exec: deny(1) network-outbound")
+  assert.equal(network?.code, "sandbox_denied_network")
 })
 
 test("approved project script is revalidated when package.json or script body changes", () => {
@@ -235,10 +372,14 @@ test("timeout, cancellation, output limits, and concurrent operation isolation l
     assert.equal(timeoutRunner.hasActive(base.operationId), false)
 
     const outputBase = compile("task-output", "operation-output", "build")
-    const outputPlan = { ...outputBase, limits: { ...outputBase.limits, outputBytes: 1_024 } }
+    const outputPlan = {
+      ...outputBase,
+      limits: { ...outputBase.limits, softOutputBytes: 64, outputBytes: 1_024 },
+    }
     const outputRunner = new TerminalRunner()
     const outputResult = await outputRunner.run(outputPlan)
     assert.equal(outputResult.truncated, true)
+    assert.equal(outputResult.hardLimitExceeded, true)
     assert.equal(outputRunner.hasActive(outputBase.operationId), false)
 
     const runner = new TerminalRunner()
@@ -258,6 +399,121 @@ test("timeout, cancellation, output limits, and concurrent operation isolation l
     assert.match(completed.content, /done/)
     assert.equal(runner.hasActive(planA.operationId), false)
     assert.equal(runner.hasActive(planB.operationId), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("runner emits ordered split progress and flushes redaction on normal, timeout, and cancellation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pingo-progress-"))
+  try {
+    writeFileSync(
+      join(root, "normal.js"),
+      'process.stdout.write("Bearer abc."); process.stderr.write("def");',
+    )
+    writeFileSync(
+      join(root, "timeout.js"),
+      'process.stdout.write("api_key=xx"); setInterval(() => {}, 100);',
+    )
+    writeFileSync(
+      join(root, "cancel.js"),
+      'process.stderr.write("token=can"); setInterval(() => {}, 100);',
+    )
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          test: "node normal.js",
+          build: "node timeout.js",
+          lint: "node cancel.js",
+        },
+      }),
+    )
+    const compile = (taskId: string, operationId: string, script: "test" | "build" | "lint") =>
+      compileTerminalIntent(
+        { kind: "project.script", packageManager: "npm", script, forwardedArgs: [], cwd: "." },
+        { taskId, operationId, sourceWindowId: "window", projectRoot: root },
+      )
+
+    const normalEvents: Array<{
+      stream: string
+      seq: number
+      operationId: string
+      content: string
+    }> = []
+    const normalResult = await new TerminalRunner().run(
+      compile("task-normal", "op-normal", "test"),
+      { onProgress: (event) => normalEvents.push(event) },
+    )
+    assert.equal(normalResult.exitCode, 0)
+    assert.deepEqual(
+      normalEvents.map((event) => event.seq),
+      normalEvents.map((_, index) => index),
+    )
+    assert.ok(normalEvents.every((event) => event.operationId === "op-normal"))
+    assert.ok(normalEvents.some((event) => event.stream === "stdout"))
+    assert.ok(normalEvents.some((event) => event.stream === "stderr"))
+    assert.doesNotMatch(normalEvents.map((event) => event.content).join(""), /abc\.def/)
+
+    const timeoutEvents: string[] = []
+    const timeoutBase = compile("task-timeout-progress", "op-timeout-progress", "build")
+    const timeoutPlan = {
+      ...timeoutBase,
+      limits: { ...timeoutBase.limits, timeoutMs: 500 },
+    }
+    const timeoutResult = await new TerminalRunner().run(timeoutPlan, {
+      onProgress: (event) => timeoutEvents.push(event.content),
+    })
+    assert.equal(timeoutResult.timedOut, true)
+    assert.doesNotMatch(timeoutEvents.join(""), /xx/)
+
+    const cancelRunner = new TerminalRunner()
+    const cancelEvents: string[] = []
+    const cancelPlan = compile("task-cancel-progress", "op-cancel-progress", "lint")
+    const cancelRun = cancelRunner.run(cancelPlan, {
+      onProgress: (event) => cancelEvents.push(event.content),
+    })
+    const deadline = Date.now() + 2_000
+    while (!cancelRunner.hasActive(cancelPlan.operationId)) {
+      if (Date.now() > deadline) throw new Error("cancel progress operation did not start")
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    assert.equal(await cancelRunner.cancel(cancelPlan.taskId, cancelPlan.operationId), true)
+    const cancelResult = await cancelRun
+    assert.equal(cancelResult.cancelled, true)
+    assert.doesNotMatch(cancelEvents.join(""), /can/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("soft output folding does not terminate a process and preserves its tail", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pingo-soft-limit-"))
+  try {
+    writeFileSync(
+      join(root, "soft.js"),
+      'process.stdout.write("HEAD-" + "x".repeat(200)); setTimeout(() => process.stdout.write("-TAIL"), 250);',
+    )
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { test: "node soft.js" } }))
+    const base = compileTerminalIntent(
+      {
+        kind: "project.script",
+        packageManager: "npm",
+        script: "test",
+        forwardedArgs: [],
+        cwd: ".",
+      },
+      { taskId: "task-soft", operationId: "op-soft", sourceWindowId: "window", projectRoot: root },
+    )
+    const result = await new TerminalRunner().run({
+      ...base,
+      limits: { ...base.limits, softOutputBytes: 32, outputBytes: 1_024 },
+    })
+    assert.equal(result.exitCode, 0)
+    assert.equal(result.hardLimitExceeded, false)
+    assert.equal(result.truncated, true)
+    assert.match(result.content, /已折叠/)
+    assert.match(result.content, /-TAIL/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

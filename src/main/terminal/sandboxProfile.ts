@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import type {
   ExecutableIdentity,
   TerminalSandboxSpec,
+  TerminalSandboxTier,
   TerminalEffects,
 } from "../../shared/types.js"
 import { executableRuntimeRoots } from "./executableIdentity.js"
@@ -15,6 +16,7 @@ export function createSandboxSpec(
   operationId: string,
   executable: ExecutableIdentity,
   effects: TerminalEffects,
+  tier: TerminalSandboxTier = effects.workspace === "write" ? "workspace-write" : "read-only",
 ): TerminalSandboxSpec {
   const tempRoot = join(tmpdir(), "pingo-terminal", operationId)
   const readRoots = [
@@ -34,6 +36,7 @@ export function createSandboxSpec(
   const protectedPaths = getProtectedPaths(projectRoot)
   const digestInput = {
     profileVersion: SANDBOX_PROFILE_VERSION,
+    tier,
     readRoots: uniqueSorted(readRoots),
     writeRoots: uniqueSorted(writeRoots),
     protectedPaths: uniqueSorted(protectedPaths),

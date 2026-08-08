@@ -1,18 +1,23 @@
 import { createHash } from "node:crypto"
 import { existsSync, openSync, readSync, realpathSync, statSync, closeSync } from "node:fs"
 import { dirname, join } from "node:path"
-import type { ExecutableIdentity } from "../../shared/types.js"
+import type { ExecutableIdentity, TerminalExecutableName } from "../../shared/types.js"
 
-const FIXED_EXECUTABLES: Record<"git" | "npm", string[]> = {
+const FIXED_EXECUTABLES: Record<TerminalExecutableName, string[]> = {
   git: ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"],
   npm: [],
+  node: [],
+  pnpm: [],
+  yarn: [],
+  bun: [],
 }
 
-export function resolveExecutableIdentity(displayName: "git" | "npm"): ExecutableIdentity {
+export function resolveExecutableIdentity(displayName: TerminalExecutableName): ExecutableIdentity {
   const candidates = [...FIXED_EXECUTABLES[displayName]]
-  if (displayName === "npm") {
+  if (displayName === "node") candidates.unshift(process.execPath)
+  if (displayName !== "git") {
     const pathEntries = (process.env.PATH ?? "").split(":").filter(Boolean)
-    candidates.push(...pathEntries.map((entry) => join(entry, "npm")))
+    candidates.push(...pathEntries.map((entry) => join(entry, displayName)))
   }
   for (const candidate of candidates) {
     const identity = readExecutableIdentity(candidate, displayName)
@@ -43,7 +48,7 @@ export function sameExecutableIdentity(a: ExecutableIdentity, b: ExecutableIdent
 
 export function executableRuntimeRoots(identity: ExecutableIdentity): string[] {
   const roots = new Set<string>([dirname(identity.realPath)])
-  if (identity.displayName === "npm") {
+  if (identity.displayName !== "git") {
     // npm-cli.js imports npm's package-local runtime. Keep this exact package
     // root available while the real HOME remains default-denied by Seatbelt.
     roots.add(dirname(dirname(dirname(identity.realPath))))
@@ -54,7 +59,7 @@ export function executableRuntimeRoots(identity: ExecutableIdentity): string[] {
 
 function readExecutableIdentity(
   candidate: string,
-  displayName: "git" | "npm",
+  displayName: TerminalExecutableName,
 ): ExecutableIdentity | null {
   try {
     if (!existsSync(candidate)) return null
