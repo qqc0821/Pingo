@@ -56,7 +56,17 @@ export function createPetWindow(store: SettingsStore): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
     },
+  })
+
+  petWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
+  petWindow.webContents.on("will-navigate", (event, url) => {
+    if (!isAllowedNavigation(url)) event.preventDefault()
+  })
+  petWindow.webContents.on("will-redirect", (event, url) => {
+    if (!isAllowedNavigation(url)) event.preventDefault()
   })
 
   petWindow.setAlwaysOnTop(true, "floating")
@@ -82,6 +92,19 @@ export function createPetWindow(store: SettingsStore): BrowserWindow {
   }
 
   return petWindow
+}
+
+function isAllowedNavigation(url: string): boolean {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    try {
+      const allowed = new URL(process.env.ELECTRON_RENDERER_URL)
+      const target = new URL(url)
+      return target.origin === allowed.origin
+    } catch {
+      return false
+    }
+  }
+  return url.startsWith("file://")
 }
 
 export function getPetWindow(): BrowserWindow | null {

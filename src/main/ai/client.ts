@@ -3,15 +3,14 @@ import type { ToolDefinition, ToolExecution } from "../tools/types.js"
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com/v1/chat/completions"
 const DEFAULT_MODEL = "deepseek-chat"
-const REQUEST_TIMEOUT_MS = 60_000
-const TOOL_TIMEOUT_MS = 10_000
+const NETWORK_REQUEST_TIMEOUT_MS = 60_000
 const MAX_HISTORY = 24
 const MAX_TOOL_LOOPS = 6
 
 const TOOL_SYSTEM_MESSAGE: ChatMessageInput = {
   role: "system",
   content:
-    "你是 Pingo，本地项目助手。只能通过提供的只读工具查看用户明确授权的项目目录。不要索要或读取密钥、环境变量、.git、.ssh 或目录外文件；工具返回错误时，直接向用户解释并停止尝试。",
+    "你是 Pingo，本地项目助手。只能通过结构化工具提出请求；权限、风险等级、确认结果和实际执行都由 Pingo 主进程决定。不要索要或读取密钥、环境变量、.git、.ssh 或目录外文件；收到 denied、未授权或策略拒绝结果时，向用户解释并停止重复相同操作。不要构造 Shell 字符串，不要提出 Shell、解释器、sudo、安装、永久删除或系统自动化请求。",
 }
 
 interface ActiveRequest {
@@ -76,11 +75,6 @@ export class ModelClient {
     this.activeRequest = request
     emit({ type: "start" })
 
-    const timeout = setTimeout(() => {
-      request.timedOut = true
-      request.controller.abort()
-    }, REQUEST_TIMEOUT_MS)
-
     try {
       if (executeTool && toolDefinitions.length > 0) {
         await this.streamWithTools(messages, emit, executeTool, toolDefinitions, apiKey, request)
@@ -93,7 +87,6 @@ export class ModelClient {
       else if (request.timedOut) emit({ type: "error", message: "模型请求超时，请稍后重试。" })
       else emit({ type: "error", message: toSafeErrorMessage(error) })
     } finally {
-      clearTimeout(timeout)
       if (this.activeRequest === request) this.activeRequest = null
     }
   }
@@ -149,7 +142,9 @@ export class ModelClient {
       for (const toolCall of result.toolCalls) {
         if (request.cancelled) return
         const args = parseToolArguments(toolCall.arguments)
-        const execution = await withToolTimeout(executeTool(toolCall.name, args), toolCall.name)
+        // This promise may intentionally wait for a human permission or approval decision.
+        // Execution-specific limits belong to the tool (for example TerminalRunner), not here.
+        const execution = await executeTool(toolCall.name, args)
         emit({ type: "tool", name: toolCall.name, detail: execution.detail })
         conversation.push({ role: "tool", tool_call_id: toolCall.id, content: execution.content })
       }
@@ -176,20 +171,33 @@ export class ModelClient {
       body.tool_choice = "auto"
     }
 
-    const response = await fetch(process.env.MODEL_BASE_URL?.trim() || DEFAULT_BASE_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: request.controller.signal,
-    })
-    if (!response.ok) {
-      const detail = (await response.text().catch(() => "")).trim().slice(0, 180)
-      throw new Error(`模型服务返回 ${response.status}${detail ? `：${detail}` : ""}`)
+    const networkController = new AbortController()
+    const abortNetwork = () => networkController.abort()
+    request.controller.signal.addEventListener("abort", abortNetwork, { once: true })
+    if (request.controller.signal.aborted) networkController.abort()
+    const timeout = setTimeout(() => {
+      request.timedOut = true
+      networkController.abort()
+    }, NETWORK_REQUEST_TIMEOUT_MS)
+    try {
+      const response = await fetch(process.env.MODEL_BASE_URL?.trim() || DEFAULT_BASE_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: networkController.signal,
+      })
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => "")).trim().slice(0, 180)
+        throw new Error(`模型服务返回 ${response.status}${detail ? `：${detail}` : ""}`)
+      }
+      return response
+    } finally {
+      clearTimeout(timeout)
+      request.controller.signal.removeEventListener("abort", abortNetwork)
     }
-    return response
   }
 }
 
@@ -285,23 +293,4 @@ function getDeltaContent(raw: string): string | null {
 function toSafeErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message.slice(0, 240)
   return "模型请求失败，请检查网络和模型配置。"
-}
-
-async function withToolTimeout(
-  promise: Promise<ToolExecution>,
-  toolName: string,
-): Promise<ToolExecution> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<ToolExecution>((resolve) => {
-    timer = setTimeout(
-      () =>
-        resolve({ content: `工具 ${toolName} 执行超时。`, detail: `工具 ${toolName} 执行超时` }),
-      TOOL_TIMEOUT_MS,
-    )
-  })
-  try {
-    return await Promise.race([promise, timeout])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
 }

@@ -139,3 +139,14 @@ Local Data
 4. 统一确认模型：只读、生成草稿、修改本地文件、调用外部服务分别定义确认级别。
 5. 统一操作日志和撤销记录：尤其覆盖文件移动和外部发送动作。
 6. macOS 安全集成：Keychain、剪贴板、选中文字读取，以及后续的 Accessibility、Shortcuts 和 AppleScript。
+
+## 受控任务能力实现状态（2026-08-08）
+
+当前代码已将文件/Terminal 任务接入目标架构，但仍保持“开发工具是可选辅助”的产品定位：
+
+- `src/main/tasks/taskManager.ts` 负责 `proposed → awaiting_permission → planning → awaiting_confirmation → executing → completed/failed/cancelled` 状态、AI 工具循环、取消和事件转发。
+- `src/main/security/capabilityManager.ts`、`approvalBroker.ts`、`riskClassifier.ts` 和 `auditLogger.ts` 位于 Main Process；授权按窗口/会话/真实目录范围绑定，审批按不可变 digest、短 TTL 和一次性 token 绑定。
+- `src/main/tools/fileOperations.ts` 只实现结构化目录/文本文件操作；`write_file` 和 `apply_patch` 使用原子替换与 hash/mtime 复检，`trash_path` 只使用可恢复废纸篓。
+- `src/main/terminal/commandPolicy.ts` 和 `runner.ts` 只接受白名单 executable/args/cwd，强制 `shell: false`、最小环境、超时、输出上限和取消回收。
+- `src/preload/index.ts` 只暴露任务、权限、确认、审计和撤销的一事一方法；Renderer 不获得 Node、文件系统、`child_process` 或通用命令接口。
+- `electron-builder.yml` 已启用 Hardened Runtime 和最小 Electron JIT entitlements；公开分发仍需用户自己的 Developer ID 签名/公证凭据。

@@ -51,7 +51,110 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "create_directory",
+      description: "在已经授权的目录内创建一个目录；执行前必须确认预览。",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string", description: "项目内相对目录路径" } },
+        required: ["path"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description: "创建或原子修改授权目录内的文本文件；执行前必须确认 diff。",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "项目内相对文件路径" },
+          content: { type: "string", description: "完整文本内容" },
+          expectedHash: { type: "string", description: "预览时的文件 sha256，可选" },
+          expectedMtimeMs: { type: "number", description: "预览时的 mtime，可选" },
+        },
+        required: ["path", "content"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "apply_patch",
+      description: "对授权目录内的文本文件应用 unified diff；执行前必须确认 diff。",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "项目内相对文件路径" },
+          patch: { type: "string", description: "unified diff 补丁" },
+          expectedHash: { type: "string", description: "预览时的文件 sha256，可选" },
+        },
+        required: ["path", "patch"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "move_path",
+      description: "移动或重命名授权目录内的路径；执行前必须确认完整路径。",
+      parameters: {
+        type: "object",
+        properties: {
+          from: { type: "string", description: "项目内原相对路径" },
+          to: { type: "string", description: "项目内目标相对路径" },
+          expectedHash: { type: "string", description: "预览时的来源 sha256，可选" },
+        },
+        required: ["from", "to"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "trash_path",
+      description: "将授权目录内的路径移入可恢复废纸篓；执行前必须强确认。",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "项目内相对路径" },
+          expectedHash: { type: "string", description: "预览时的 sha256，可选" },
+        },
+        required: ["path"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "terminal_execute",
+      description: "运行 Pingo 策略允许的结构化 Terminal 命令；所有命令都需要逐次确认。",
+      parameters: {
+        type: "object",
+        properties: {
+          executable: { type: "string", description: "允许的绝对可执行文件路径" },
+          args: { type: "array", items: { type: "string" }, description: "参数数组" },
+          cwd: { type: "string", description: "授权项目内相对工作目录" },
+          timeoutMs: { type: "number", description: "1,000 到 30,000 毫秒" },
+          outputLimitBytes: { type: "number", description: "输出上限" },
+          envKeys: { type: "array", items: { type: "string" }, description: "最小环境变量白名单" },
+        },
+        required: ["executable", "cwd"],
+        additionalProperties: false,
+      },
+    },
+  },
 ]
+
+export const READ_ONLY_TOOL_NAMES = new Set(["list_files", "search_files", "read_file"])
 
 export async function executeTool(
   projectPath: string | undefined,
@@ -66,6 +169,12 @@ export async function executeTool(
   }
 
   try {
+    if (!READ_ONLY_TOOL_NAMES.has(name)) {
+      return {
+        content: `工具 ${name} 必须经过 Pingo 的权限和逐次确认流程。`,
+        detail: `已阻止未接入 broker 的工具 ${name}`,
+      }
+    }
     switch (name) {
       case "list_files":
         return { content: listFiles(projectPath, args), detail: "正在列出项目文件…" }

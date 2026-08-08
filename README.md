@@ -38,10 +38,14 @@ npm run pack:mac
 
 ## 安全边界
 
-- renderer 不持有 API Key、Node.js 或文件系统权限。
-- 文件工具只接受授权项目内的相对路径。
-- `..`、绝对路径、符号链接越权、`.env`、密钥文件、敏感目录、二进制和超大文件默认拒绝。
-- MVP 不支持任意 Shell、修改文件、删除文件或安装软件。
+- Renderer 保持 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`，只通过 preload 白名单接收任务状态、权限卡和操作预览。
+- 能力授权、风险分级、审批 token、路径复检和真实执行全部由 Main Process 控制；权限默认拒绝，session 授权不会跨应用重启保留。
+- 文件工具只接受用户明确授权目录内的相对路径；`..`、绝对路径、反斜杠、符号链接越权、`.env`、密钥文件、敏感目录、二进制和超大文件默认拒绝。
+- 写入、补丁、移动、废纸篓和所有 Terminal 命令都必须逐次“允许一次”；写入使用原子替换并绑定文件 hash/mtime，删除只进入可恢复废纸篓。
+- Terminal 仅接受结构化 `executable + args + cwd`，强制 `shell: false`、最小环境、超时、输出上限和取消回收；Shell、解释器、sudo、安装、网络客户端和永久删除永远阻止。
+- 操作历史保存在应用数据目录的 `0600` 脱敏 JSONL 中，不保存 API Key、完整 Prompt、文件全文或未脱敏输出。
+
+能力方案、风险矩阵、确认规则和验证矩阵见：[受控文件与 Terminal 能力方案](docs/TERMINAL_CAPABILITY_PLAN.md)。Developer ID 签名和公证凭据通过 electron-builder 的标准环境变量配置；本地没有证书时 `pack:mac` 可能只剩外部签名阻塞。
 
 ## Git 管理
 

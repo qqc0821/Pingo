@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { PetStateEvent, PingoAPI, WindowAppearance, WindowState } from "../shared/types.js"
+import type {
+  ChatStreamEvent,
+  PetStateEvent,
+  PingoAPI,
+  WindowAppearance,
+  WindowState,
+} from "../shared/types.js"
 
 const api: PingoAPI = {
   platform: process.platform,
@@ -24,6 +30,22 @@ const api: PingoAPI = {
     get: () => ipcRenderer.invoke("settings:get"),
     update: (settings) => ipcRenderer.invoke("settings:update", settings),
   },
+  task: {
+    submit: (messages) => ipcRenderer.invoke("task:submit", messages),
+    cancel: (taskId) => ipcRenderer.send("task:cancel", taskId),
+    decide: (decision) => ipcRenderer.invoke("task:decide", decision),
+    undo: (taskId, undoId) => ipcRenderer.invoke("task:undo", { taskId, undoId }),
+    grant: (request) => ipcRenderer.invoke("task:grant", request),
+    deny: (taskId) => ipcRenderer.invoke("task:deny", taskId),
+    onEvent: (listener) => subscribe("pingo:task-event", listener),
+  },
+  audit: {
+    list: () => ipcRenderer.invoke("audit:list"),
+  },
+  capabilities: {
+    list: () => ipcRenderer.invoke("capabilities:list"),
+    revoke: (grantId) => ipcRenderer.invoke("capabilities:revoke", grantId),
+  },
 }
 
 contextBridge.exposeInMainWorld("pingo", api)
@@ -37,6 +59,10 @@ function subscribe(channel: "pingo:pet-state", listener: (event: PetStateEvent) 
 function subscribe(
   channel: "pingo:appearance",
   listener: (appearance: WindowAppearance) => void,
+): () => void
+function subscribe(
+  channel: "pingo:task-event",
+  listener: (event: ChatStreamEvent) => void,
 ): () => void
 function subscribe(channel: string, listener: (...args: never[]) => void): () => void {
   const wrappedListener = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => {
