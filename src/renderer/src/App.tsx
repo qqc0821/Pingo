@@ -117,9 +117,10 @@ export function App(): ReactElement {
   const [notice, setNotice] = useState("提出任务，Pingo 会在需要时先请求授权。")
   const [toolActivity, setToolActivity] = useState("")
   const [permission, setPermission] = useState<PendingPermission | null>(null)
-  const [approval, setApproval] = useState<ApprovalRequest | null>(null)
+  const [approvals, setApprovals] = useState<Record<string, ApprovalRequest>>({})
   const [lastResult, setLastResult] = useState<OperationResult | null>(null)
   const [permissionBusy, setPermissionBusy] = useState(false)
+  const [approvalNow, setApprovalNow] = useState(() => Date.now())
   const dragStart = useRef<{ x: number; y: number; pointerId: number; didDrag: boolean } | null>(
     null,
   )
@@ -127,6 +128,13 @@ export function App(): ReactElement {
   const messagesEnd = useRef<HTMLDivElement>(null)
   const petStateTimer = useRef<number | null>(null)
   const currentPetState = PET_STATE_CONFIG[petState]
+  const approvalList = Object.values(approvals)
+
+  useEffect(() => {
+    if (approvalList.length === 0) return
+    const timer = window.setInterval(() => setApprovalNow(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [approvalList.length])
 
   useEffect(() => {
     let active = true
@@ -300,11 +308,16 @@ export function App(): ReactElement {
       }
       if (event.type === "approval-request") {
         setTaskId(event.request.taskId)
-        setApproval(event.request)
+        setApprovals((current) => ({ ...current, [event.request.operationId]: event.request }))
         return
       }
       if (event.type === "operation-result") {
         setLastResult(event.result)
+        setApprovals((current) => {
+          const next = { ...current }
+          delete next[event.result.operationId]
+          return next
+        })
         if (event.result.status !== "completed") setNotice(event.result.detail)
         return
       }
@@ -422,12 +435,10 @@ export function App(): ReactElement {
   const stopTask = useCallback(() => {
     if (taskId) window.pingo.task.cancel(taskId)
     assistantId.current = null
-    setTaskState("cancelled")
-    setApproval(null)
+    setApprovals({})
     setPermission(null)
-    setNotice("已取消当前任务")
-    showPetState("idle")
-  }, [showPetState, taskId])
+    setNotice("正在取消，等待终端进程真正结束…")
+  }, [taskId])
 
   const submitTask = useCallback(
     async (event?: FormEvent) => {
@@ -452,7 +463,7 @@ export function App(): ReactElement {
       assistantId.current = nextAssistant.id
       setMessages(nextMessages)
       setDraft("")
-      setApproval(null)
+      setApprovals({})
       setPermission(null)
       setLastResult(null)
       setTaskState("proposed")
@@ -505,17 +516,33 @@ export function App(): ReactElement {
   }, [permission])
 
   const decideApproval = useCallback(
-    async (decision: OperationDecision["decision"]) => {
-      if (!approval) return
+    async (approval: ApprovalRequest, decision: OperationDecision["decision"]) => {
       await window.pingo.task.decide({
         taskId: approval.taskId,
         operationId: approval.operationId,
         decision,
       })
-      setApproval(null)
+      setApprovals((current) => {
+        const next = { ...current }
+        delete next[approval.operationId]
+        return next
+      })
     },
-    [approval],
+    [],
   )
+
+  const copyApprovalCommand = useCallback(async (request: ApprovalRequest) => {
+    const terminalPlan = request.plan.terminalPlan
+    const command = terminalPlan
+      ? formatDisplayCommand(terminalPlan.executable.displayName, terminalPlan.argv)
+      : request.plan.preview
+    try {
+      await navigator.clipboard.writeText(command)
+      setNotice("已复制真实命令（不会执行）")
+    } catch {
+      setNotice("复制失败，请手动选择预览中的命令")
+    }
+  }, [])
 
   const undoLast = useCallback(async () => {
     if (!lastResult?.undoId || !taskId) return
@@ -558,7 +585,7 @@ export function App(): ReactElement {
                 name={
                   settingsOpen
                     ? "settings"
-                    : approval || permission
+                    : approvalList.length > 0 || permission
                       ? "info"
                       : taskState === "executing"
                         ? "tool"
@@ -700,31 +727,95 @@ export function App(): ReactElement {
                   </div>
                 </div>
               )}
-              {approval && (
-                <div className="action-card approval-card" role="dialog" aria-label="操作确认">
-                  <strong>
-                    {approval.plan.risk} · {approval.plan.kind}
-                  </strong>
-                  <p className="risk-reason">{approval.plan.riskReason}</p>
-                  <pre>{approval.plan.preview}</pre>
-                  <p>
-                    可撤销：{approval.plan.reversible ? "是" : "否"} · 仅允许一次 · 预览摘要{" "}
-                    {approval.plan.digest.slice(0, 12)}…
-                  </p>
-                  <div className="action-buttons">
-                    <button type="button" onClick={() => void decideApproval("approve")}>
-                      允许一次
-                    </button>
-                    <button
-                      type="button"
-                      className="button-secondary"
-                      onClick={() => void decideApproval("deny")}
-                    >
-                      拒绝
-                    </button>
+              {approvalList.map((approval) => {
+                const terminalPlan = approval.plan.terminalPlan
+                const remainingMs = Math.max(0, approval.expiresAt - approvalNow)
+                const remainingSeconds = Math.ceil(remainingMs / 1_000)
+                const expired = remainingMs === 0
+                return (
+                  <div
+                    key={approval.operationId}
+                    className="action-card approval-card"
+                    role="dialog"
+                    aria-label={`操作确认 ${approval.operationId}`}
+                  >
+                    <strong>
+                      {approval.plan.risk} ·{" "}
+                      {terminalPlan ? "Terminal operation" : approval.plan.kind}
+                    </strong>
+                    <p className="risk-reason">{approval.plan.riskReason}</p>
+                    {terminalPlan ? (
+                      <>
+                        <div className="approval-command">
+                          <span>真实命令</span>
+                          <code>
+                            {formatDisplayCommand(
+                              terminalPlan.executable.displayName,
+                              terminalPlan.argv,
+                            )}
+                          </code>
+                        </div>
+                        <div className="approval-facts">
+                          <span>工作目录：{terminalPlan.cwd.relativePath || "."}</span>
+                          <span>
+                            代码执行：{terminalPlan.effects.projectCodeExecution ? "是" : "否"}
+                          </span>
+                          <span>文件范围：workspace {terminalPlan.effects.workspace}</span>
+                          <span>网络：关闭（公网、localhost、私网、Unix socket）</span>
+                          <span>HOME/密钥/目录外：不可用</span>
+                          <span>
+                            限制：{terminalPlan.limits.timeoutMs / 1_000}s · 输出{" "}
+                            {terminalPlan.limits.outputBytes} bytes · 可撤销：否
+                          </span>
+                        </div>
+                        {terminalPlan.projectScript && (
+                          <div className="approval-script">
+                            <span>
+                              脚本：{terminalPlan.projectScript.name} · 来源：
+                              {terminalPlan.projectScript.packageJsonRelativePath}
+                            </span>
+                            <code>{terminalPlan.projectScript.body}</code>
+                            <small>
+                              package.json SHA-256：{terminalPlan.projectScript.packageJsonSha256}
+                            </small>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <pre>{approval.plan.preview}</pre>
+                    )}
+                    <p>
+                      一次性 token · 计划摘要{" "}
+                      {(terminalPlan?.planDigest ?? approval.plan.digest).slice(0, 12)}… ·{" "}
+                      {expired ? "已过期，请重新规划" : `${remainingSeconds}s 后过期`}
+                    </p>
+                    <div className="action-buttons">
+                      <button
+                        type="button"
+                        disabled={expired}
+                        onClick={() => void decideApproval(approval, "approve")}
+                      >
+                        运行一次
+                      </button>
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        disabled={expired}
+                        onClick={() => void decideApproval(approval, "deny")}
+                      >
+                        拒绝
+                      </button>
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        onClick={() => void copyApprovalCommand(approval)}
+                      >
+                        复制命令
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
+                )
+              })}
               {lastResult?.undoId && lastResult.status === "completed" && (
                 <div className="result-actions">
                   <span>这项文件操作可以撤销。</span>
@@ -740,7 +831,7 @@ export function App(): ReactElement {
                     onChange={(event) => setDraft(event.target.value)}
                     onKeyDown={handleDraftKeyDown}
                     disabled={
-                      Boolean(approval || permission || onboardingOpen) ||
+                      Boolean(approvalList.length > 0 || permission || onboardingOpen) ||
                       taskState === "executing" ||
                       taskState === "planning"
                     }
@@ -1070,6 +1161,12 @@ function buildModelHistory(messages: LocalMessage[]): ChatMessageInput[] {
       role: message.role === "error" ? "assistant" : message.role,
       content: message.content,
     }))
+}
+
+function formatDisplayCommand(executable: string, argv: string[]): string {
+  return [executable, ...argv]
+    .map((value) => (/^[A-Za-z0-9_./:=+-]+$/.test(value) ? value : JSON.stringify(value)))
+    .join(" ")
 }
 
 function formatTaskState(state: TaskState | "ready"): string {

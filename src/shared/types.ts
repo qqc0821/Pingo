@@ -46,6 +46,105 @@ export type OperationKind =
   | "trash_path"
   | "terminal.execute"
 
+export type TerminalIntent =
+  | {
+      kind: "git.read"
+      action: "status" | "diff" | "log"
+      args: string[]
+      cwd: string
+    }
+  | {
+      kind: "project.script"
+      packageManager: "npm"
+      script: string
+      forwardedArgs: string[]
+      cwd: string
+    }
+
+export interface ExecutableIdentity {
+  displayName: "git" | "npm"
+  realPath: string
+  sha256: string
+  device: number
+  inode: number
+  mtimeMs: number
+  ownerUid: number
+}
+
+export interface TerminalEffects {
+  workspace: "read" | "write"
+  projectCodeExecution: boolean
+  network: "none"
+  externalPaths: string[]
+}
+
+export interface TerminalSandboxSpec {
+  profileVersion: number
+  readRoots: string[]
+  writeRoots: string[]
+  protectedPaths: string[]
+  tempRoot: string
+  network: "deny"
+  specDigest: string
+}
+
+export interface TerminalLimits {
+  timeoutMs: number
+  outputBytes: number
+}
+
+export interface ProjectScriptBinding {
+  packageJsonRelativePath: string
+  name: "lint" | "typecheck" | "format:check" | "test" | "build"
+  body: string
+  packageJsonSha256: string
+}
+
+export interface ResolvedCommandPlan {
+  operationId: string
+  taskId: string
+  sourceWindowId: string
+  intent: TerminalIntent
+  executable: ExecutableIdentity
+  argv: string[]
+  cwd: {
+    rootId: string
+    relativePath: string
+    realPath: string
+  }
+  projectScript?: ProjectScriptBinding
+  effects: TerminalEffects
+  sandbox: TerminalSandboxSpec
+  limits: TerminalLimits
+  risk: "R1" | "R3" | "R4"
+  reason: string
+  planDigest: string
+  createdAt: number
+  expiresAt: number
+}
+
+export type TerminalPolicyCode =
+  | "user_denied"
+  | "approval_expired"
+  | "sandbox_unavailable"
+  | "sandbox_denied_fs"
+  | "sandbox_denied_network"
+  | "plan_changed"
+  | "script_changed"
+  | "executable_changed"
+  | "command_forbidden"
+  | "timed_out"
+  | "cancelled"
+  | "output_limit_exceeded"
+
+export interface TerminalPolicyFailure {
+  code: TerminalPolicyCode
+  policy_code: TerminalPolicyCode
+  message: string
+  retryable: boolean
+  requiredAction?: "ask_user" | "change_approach" | "stop"
+}
+
 export interface CapabilityGrant {
   grantId: string
   capabilities: Capability[]
@@ -92,6 +191,7 @@ export interface OperationPlan {
   targets: string[]
   preview: string
   command?: CommandPlan
+  terminalPlan?: ResolvedCommandPlan
   preconditions: FileStatePrecondition[]
   digest: string
   createdAt: number
@@ -104,6 +204,16 @@ export interface ApprovalRequest {
   taskId: string
   plan: OperationPlan
   expiresAt: number
+}
+
+export interface ApprovalTokenBinding {
+  token: string
+  planDigest: string
+  taskId: string
+  operationId: string
+  windowId: string
+  expiresAt: number
+  consumedAt?: number
 }
 
 export type OperationDecisionValue = "approve" | "deny"
@@ -124,6 +234,7 @@ export interface OperationResult {
   signal?: string | null
   truncated?: boolean
   undoId?: string
+  policyFailure?: TerminalPolicyFailure
 }
 
 export type TaskState =
@@ -153,6 +264,8 @@ export interface AuditRecord {
   status: string
   createdAt: number
   detail?: string
+  planDigest?: string
+  policyCode?: TerminalPolicyCode
 }
 
 export interface CapabilityRequest {

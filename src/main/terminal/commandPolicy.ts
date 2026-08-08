@@ -1,5 +1,5 @@
 import { basename } from "node:path"
-import type { CommandPlan } from "../../shared/types.js"
+import type { CommandPlan, TerminalIntent } from "../../shared/types.js"
 import { resolveProjectPath } from "../security/pathGuard.js"
 
 const MAX_ARGS = 32
@@ -7,13 +7,13 @@ const MAX_ARG_LENGTH = 1_000
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_OUTPUT_LIMIT_BYTES = 128_000
 const SHELL_SYNTAX = /[;&|<>$`(){}\n\r]/
-const ALLOWED_ENV_KEYS = new Set(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"])
+const QUALITY_SCRIPTS = new Set(["lint", "typecheck", "format:check", "test", "build"])
 
 const COMMAND_PATHS: Record<string, Set<string>> = {
   pwd: new Set(["/bin/pwd", "/usr/bin/pwd"]),
   ls: new Set(["/bin/ls", "/usr/bin/ls"]),
   git: new Set(["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"]),
-  npm: new Set(["/usr/local/bin/npm", "/opt/homebrew/bin/npm", "/usr/bin/npm"]),
+  npm: new Set(["/usr/bin/npm", "/usr/local/bin/npm", "/opt/homebrew/bin/npm"]),
 }
 
 export interface CommandRequest {
@@ -30,6 +30,10 @@ export interface CommandPolicyResult {
   riskReason: string
 }
 
+/**
+ * Legacy direct-command validator retained only for compatibility with old
+ * callers/tests. Production model tools must use compileTerminalIntent below.
+ */
 export function validateCommand(projectPath: string, value: unknown): CommandPolicyResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Terminal 参数必须是结构化对象")
@@ -43,14 +47,17 @@ export function validateCommand(projectPath: string, value: unknown): CommandPol
   if (args.some((arg) => SHELL_SYNTAX.test(arg))) {
     throw new Error("参数包含 Shell 语法，Terminal 只接受安全的参数数组")
   }
-  validateSubcommand(commandName, args)
+  if (candidate.envKeys !== undefined) {
+    throw new Error("模型不能指定 Terminal 环境变量")
+  }
+  validateLegacySubcommand(commandName, args)
 
+  if (commandName === "npm") throw new Error("npm run 当前已暂停，等待脚本绑定安全链完成")
   const cwdValue = candidate.cwd
   if (typeof cwdValue !== "string" || !cwdValue.trim()) throw new Error("cwd 必须是字符串")
   const cwd = resolveProjectPath(projectPath, cwdValue)
   const timeoutMs = parseLimit(candidate.timeoutMs, 1_000, DEFAULT_TIMEOUT_MS)
   const outputLimitBytes = parseLimit(candidate.outputLimitBytes, 1_024, DEFAULT_OUTPUT_LIMIT_BYTES)
-  const envKeys = parseEnvKeys(candidate.envKeys)
   return {
     plan: {
       executable,
@@ -58,41 +65,187 @@ export function validateCommand(projectPath: string, value: unknown): CommandPol
       cwd,
       timeoutMs,
       outputLimitBytes,
-      envKeys,
+      envKeys: ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"],
     },
-    riskReason:
-      commandName === "npm"
-        ? "npm run 会执行仓库脚本，属于 R3 高风险命令"
-        : "所有 Terminal 命令都需要逐次确认",
+    riskReason: "旧版直接命令接口仅用于兼容；生产 Terminal 必须使用结构化意图",
   }
 }
 
+export function parseTerminalIntent(value: unknown): TerminalIntent {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("TerminalIntent 必须是结构化对象")
+  }
+  const candidate = value as Record<string, unknown>
+  if (candidate.kind === "git.read") {
+    assertExactKeys(candidate, ["kind", "action", "args", "cwd"])
+    if (
+      candidate.action !== "status" &&
+      candidate.action !== "diff" &&
+      candidate.action !== "log"
+    ) {
+      throw new Error("git.read 只开放 status、diff、log")
+    }
+    return {
+      kind: "git.read",
+      action: candidate.action,
+      args: parseArgs(candidate.args),
+      cwd: parseRelativeCwd(candidate.cwd),
+    }
+  }
+  if (candidate.kind === "project.script") {
+    assertExactKeys(candidate, ["kind", "packageManager", "script", "forwardedArgs", "cwd"])
+    if (candidate.packageManager !== "npm") throw new Error("只开放 npm 项目质量脚本")
+    if (typeof candidate.script !== "string" || !QUALITY_SCRIPTS.has(candidate.script)) {
+      throw new Error("只开放 lint、typecheck、format:check、test、build 质量脚本")
+    }
+    const forwardedArgs = parseArgs(candidate.forwardedArgs)
+    if (forwardedArgs.length > 0) {
+      throw new Error("项目脚本暂不接受转发参数")
+    }
+    return {
+      kind: "project.script",
+      packageManager: "npm",
+      script: candidate.script as "lint" | "typecheck" | "format:check" | "test" | "build",
+      forwardedArgs,
+      cwd: parseRelativeCwd(candidate.cwd),
+    }
+  }
+  throw new Error("不支持的 TerminalIntent")
+}
+
 export function isForbiddenCommand(value: unknown): boolean {
-  try {
-    if (typeof value !== "object" || value === null) return true
-    const candidate = value as CommandRequest
-    const executable =
-      typeof candidate.executable === "string" ? basename(candidate.executable) : ""
-    return [
-      "sh",
-      "bash",
-      "zsh",
-      "fish",
-      "sudo",
-      "osascript",
-      "python",
-      "python3",
-      "node",
-      "rm",
-      "mv",
-      "cp",
-      "curl",
-      "wget",
-      "installer",
-      "launchctl",
-    ].includes(executable)
-  } catch {
-    return true
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return true
+  const candidate = value as Record<string, unknown>
+  if (candidate.kind === "git.read" || candidate.kind === "project.script") {
+    try {
+      parseTerminalIntent(value)
+      return false
+    } catch {
+      return true
+    }
+  }
+  const executable = typeof candidate.executable === "string" ? basename(candidate.executable) : ""
+  return [
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "sudo",
+    "osascript",
+    "python",
+    "python3",
+    "node",
+    "rm",
+    "mv",
+    "cp",
+    "curl",
+    "wget",
+    "installer",
+    "launchctl",
+    "npx",
+  ].includes(executable)
+}
+
+export function validateGitReadArgs(action: "status" | "diff" | "log", args: string[]): void {
+  if (action !== "status" && action !== "diff" && action !== "log") {
+    throw new Error("git 只开放 status、diff、log 只读子命令")
+  }
+  const allowedFlags = getAllowedGitFlags(action)
+  let afterPathSeparator = false
+  let expectsValue: "count" | null = null
+  for (const arg of args) {
+    if (SHELL_SYNTAX.test(arg) || arg.includes("\u0000")) {
+      throw new Error("Git 参数包含不安全语法")
+    }
+    if (expectsValue) {
+      if (!/^\d{1,6}$/.test(arg)) throw new Error("Git 数量参数无效")
+      expectsValue = null
+      continue
+    }
+    if (arg === "--") {
+      afterPathSeparator = true
+      continue
+    }
+    if (arg.startsWith("-")) {
+      if (arg === "-n" || arg === "--max-count") {
+        if (action !== "log") throw new Error("Git 参数不属于该子命令")
+        expectsValue = "count"
+        continue
+      }
+      if (!allowedFlags.has(arg) && !isAllowedInlineGitFlag(action, arg)) {
+        throw new Error("Git 参数不在该只读子命令的安全 grammar 中")
+      }
+      continue
+    }
+    if (!afterPathSeparator && isGitPathLike(arg)) {
+      // Status/diff/log pathspecs are allowed only after --, which removes
+      // ambiguity with flags and keeps all path handling in this parser.
+      throw new Error("Git 路径参数必须位于 -- 之后")
+    }
+    validateGitRelativePath(arg)
+  }
+  if (expectsValue) throw new Error("Git 数量参数缺少值")
+}
+
+function validateLegacySubcommand(commandName: string, args: string[]): void {
+  if (commandName === "pwd") {
+    if (args.length > 0) throw new Error("pwd 不接受额外参数")
+    return
+  }
+  if (commandName === "ls") {
+    if (args.some((arg) => arg.startsWith("-") && !/^-[alhRt]+$/.test(arg))) {
+      throw new Error("ls 参数不在安全白名单中")
+    }
+    if (args.some((arg) => arg.startsWith("/"))) throw new Error("ls 不允许绝对路径参数")
+    if (args.some((arg) => arg.split("/").includes(".."))) throw new Error("ls 不允许 ..")
+    return
+  }
+  if (commandName === "git") {
+    const normalized = args[0] === "--no-pager" ? args.slice(1) : args
+    const [subcommand, ...rest] = normalized
+    validateGitReadArgs(subcommand as "status" | "diff" | "log", rest)
+    return
+  }
+  if (commandName === "npm") {
+    throw new Error("npm run 当前已暂停，等待脚本绑定安全链完成")
+  }
+  throw new Error("未知 Terminal 命令")
+}
+
+function getAllowedGitFlags(action: "status" | "diff" | "log"): Set<string> {
+  if (action === "status")
+    return new Set(["--short", "--porcelain", "--branch", "--untracked-files=no"])
+  if (action === "diff") {
+    return new Set([
+      "--cached",
+      "--staged",
+      "--stat",
+      "--name-only",
+      "--name-status",
+      "--no-color",
+      "--minimal",
+    ])
+  }
+  return new Set(["--oneline", "--decorate", "--stat", "--no-color", "--first-parent"])
+}
+
+function isAllowedInlineGitFlag(action: "status" | "diff" | "log", arg: string): boolean {
+  if (action === "status") return /^--untracked-files=(no|normal|all)$/.test(arg)
+  if (action === "log")
+    return /^--max-count=\d{1,6}$/.test(arg) || /^--pretty=(oneline|short|medium)$/.test(arg)
+  return false
+}
+
+function isGitPathLike(arg: string): boolean {
+  return !arg.startsWith("-")
+}
+
+function validateGitRelativePath(value: string): void {
+  if (!value || value.startsWith("/") || value.includes("\\") || value.includes("\u0000")) {
+    throw new Error("Git 路径必须是 workspace 内相对路径")
+  }
+  if (value.split("/").some((part) => part === "..")) {
+    throw new Error("Git 路径不允许使用 ..")
   }
 }
 
@@ -109,55 +262,28 @@ function parseArgs(value: unknown): string[] {
   if (!value.every((arg) => typeof arg === "string" && arg.length <= MAX_ARG_LENGTH)) {
     throw new Error("每个 Terminal 参数必须是有限长度字符串")
   }
-  return value as string[]
+  return [...(value as string[])]
 }
 
-function parseEnvKeys(value: unknown): string[] {
-  if (value === undefined) return ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"]
-  if (!Array.isArray(value) || value.length > ALLOWED_ENV_KEYS.size) {
-    throw new Error("envKeys 参数无效")
+function parseRelativeCwd(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.length > 4_096) {
+    throw new Error("cwd 必须是 workspace 内相对路径")
   }
-  if (!value.every((key) => typeof key === "string" && ALLOWED_ENV_KEYS.has(key))) {
-    throw new Error("Terminal 环境变量不在最小白名单中")
+  if (
+    value.startsWith("/") ||
+    value.includes("\\") ||
+    value.includes("\u0000") ||
+    value.split("/").includes("..")
+  ) {
+    throw new Error("cwd 必须是 workspace 内相对路径")
   }
-  return [...new Set(value)] as string[]
+  return value
 }
 
-function validateSubcommand(commandName: string, args: string[]): void {
-  if (commandName === "pwd") {
-    if (args.length > 0) throw new Error("pwd 不接受额外参数")
-    return
-  }
-  if (commandName === "ls") {
-    if (args.some((arg) => arg.startsWith("-") && !/^-[alhRt]+$/.test(arg))) {
-      throw new Error("ls 参数不在安全白名单中")
-    }
-    if (args.some((arg) => arg.startsWith("/"))) throw new Error("ls 不允许绝对路径参数")
-    return
-  }
-  if (commandName === "git") {
-    const [subcommand] = args
-    if (!subcommand || !["status", "diff", "log"].includes(subcommand)) {
-      throw new Error("git 只开放 status、diff、log 只读子命令")
-    }
-    if (
-      args.some((arg) =>
-        ["--ext-diff", "--no-ext-diff", "--paginate", "--exec-path", "-c", "--config-env"].includes(
-          arg,
-        ),
-      )
-    ) {
-      throw new Error("git 外部 diff、pager 和全局配置不可用")
-    }
-    return
-  }
-  if (commandName === "npm") {
-    if (args.length < 2 || args[0] !== "run" || (args[1] ?? "").startsWith("-")) {
-      throw new Error("npm 只开放 npm run <script>，不开放安装或配置命令")
-    }
-    if (args.slice(2).some((arg) => arg === "--shell" || arg === "--ignore-scripts")) {
-      throw new Error("npm 脚本参数无效")
-    }
+function assertExactKeys(value: Record<string, unknown>, keys: string[]): void {
+  const allowed = new Set(keys)
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw new Error("TerminalIntent 包含 Main 才能决定的字段")
   }
 }
 

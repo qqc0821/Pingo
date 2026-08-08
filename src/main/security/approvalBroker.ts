@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto"
-import type { ApprovalRequest, OperationDecision, OperationPlan } from "../../shared/types.js"
+import type {
+  ApprovalRequest,
+  ApprovalTokenBinding,
+  OperationDecision,
+  OperationPlan,
+} from "../../shared/types.js"
 
-export const APPROVAL_TTL_MS = 30_000
+export const APPROVAL_TTL_MS = 60_000
 
 interface PendingApproval {
   request: ApprovalRequest
@@ -23,7 +28,7 @@ export interface ApprovalValidation {
 export class ApprovalBroker {
   private readonly pending = new Map<string, PendingApproval>()
   private readonly deniedDigests = new Map<string, Set<string>>()
-  private readonly consumedTokens = new Set<string>()
+  private readonly approvalTokens = new Map<string, ApprovalTokenBinding>()
 
   createPlanDigest(value: unknown): string {
     return createHash("sha256").update(stableJson(value)).digest("hex")
@@ -33,9 +38,10 @@ export class ApprovalBroker {
     plan: OperationPlan,
     notify: (request: ApprovalRequest) => void,
   ): Promise<BrokerDecision> {
-    if (this.wasDenied(plan.taskId, plan.digest)) return { decision: "deny" }
     const now = Date.now()
     if (plan.expiresAt <= now) return { decision: "expired" }
+    const digest = getPlanDigest(plan)
+    if (this.wasDenied(plan.taskId, digest)) return { decision: "deny" }
     const request: ApprovalRequest = Object.freeze({
       operationId: plan.operationId,
       taskId: plan.taskId,
@@ -69,16 +75,25 @@ export class ApprovalBroker {
     this.pending.delete(decision.operationId)
     clearTimeout(pending.timer)
     if (decision.decision === "deny") {
+      const digest = getPlanDigest(plan)
       let denied = this.deniedDigests.get(plan.taskId)
       if (!denied) {
         denied = new Set<string>()
         this.deniedDigests.set(plan.taskId, denied)
       }
-      denied.add(plan.digest)
+      denied.add(digest)
       pending.resolve({ decision: "deny" })
       return true
     }
     const token = randomUUID()
+    this.approvalTokens.set(token, {
+      token,
+      planDigest: getPlanDigest(plan),
+      taskId: plan.taskId,
+      operationId: plan.operationId,
+      windowId: plan.sourceWindowId,
+      expiresAt: plan.expiresAt,
+    })
     pending.resolve({ decision: "approve", token })
     return true
   }
@@ -89,16 +104,24 @@ export class ApprovalBroker {
     validation: ApprovalValidation,
     now = Date.now(),
   ): void {
-    if (!token || this.consumedTokens.has(token)) throw new Error("批准 token 无效或已使用")
+    if (!token) throw new Error("批准 token 无效或已使用")
+    const binding = this.approvalTokens.get(token)
     if (
-      validation.sourceWindowId !== plan.sourceWindowId ||
-      validation.taskId !== plan.taskId ||
-      validation.operationId !== plan.operationId ||
+      !binding ||
+      binding.consumedAt !== undefined ||
+      binding.planDigest !== getPlanDigest(plan) ||
+      binding.windowId !== validation.sourceWindowId ||
+      binding.taskId !== validation.taskId ||
+      binding.operationId !== validation.operationId ||
+      plan.sourceWindowId !== validation.sourceWindowId ||
+      plan.taskId !== validation.taskId ||
+      plan.operationId !== validation.operationId ||
+      binding.expiresAt <= now ||
       plan.expiresAt <= now
     ) {
       throw new Error("批准范围或有效期无效")
     }
-    this.consumedTokens.add(token)
+    binding.consumedAt = now
   }
 
   cancelTask(taskId: string): void {
@@ -141,5 +164,27 @@ function deepFreezePlan(plan: OperationPlan): OperationPlan {
     Object.freeze(plan.command.args)
     Object.freeze(plan.command)
   }
+  if (plan.terminalPlan) {
+    Object.freeze(plan.terminalPlan.intent)
+    Object.freeze(plan.terminalPlan.argv)
+    Object.freeze(plan.terminalPlan.cwd)
+    if (plan.terminalPlan.projectScript) Object.freeze(plan.terminalPlan.projectScript)
+    Object.freeze(plan.terminalPlan.effects.externalPaths)
+    Object.freeze(plan.terminalPlan.effects)
+    Object.freeze(plan.terminalPlan.sandbox.readRoots)
+    Object.freeze(plan.terminalPlan.sandbox.writeRoots)
+    Object.freeze(plan.terminalPlan.sandbox.protectedPaths)
+    Object.freeze(plan.terminalPlan.sandbox)
+    Object.freeze(plan.terminalPlan.limits)
+    Object.freeze(plan.terminalPlan)
+  }
   return Object.freeze(plan)
+}
+
+function getPlanDigest(plan: OperationPlan): string {
+  if (!plan.terminalPlan) return plan.digest
+  const terminalPlanWithoutDigest = Object.fromEntries(
+    Object.entries(plan.terminalPlan).filter(([key]) => key !== "planDigest"),
+  )
+  return createHash("sha256").update(stableJson(terminalPlanWithoutDigest)).digest("hex")
 }

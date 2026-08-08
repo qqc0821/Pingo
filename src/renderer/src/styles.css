@@ -197,6 +197,45 @@ button {
   color: #9a3412;
 }
 
+.approval-command,
+.approval-script,
+.approval-facts {
+  display: grid;
+  gap: 4px;
+  margin: 7px 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.approval-command span,
+.approval-script span {
+  color: #9a3412;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.approval-command code,
+.approval-script code,
+.approval-script small,
+.approval-facts span {
+  color: #343541;
+  font:
+    10px/1.45 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  overflow-wrap: anywhere;
+}
+
+.approval-facts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.approval-script small {
+  color: #6b7280;
+}
+
 .action-buttons,
 .result-actions {
   display: flex;

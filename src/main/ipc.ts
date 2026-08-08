@@ -45,9 +45,9 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     const owner = getPetWindow()
     if (!owner || owner.webContents !== event.sender) return
 
-    Menu.buildFromTemplate([
-      { label: "关闭 Pingo", click: () => app.quit() },
-    ]).popup({ window: owner })
+    Menu.buildFromTemplate([{ label: "关闭 Pingo", click: () => app.quit() }]).popup({
+      window: owner,
+    })
   })
 
   ipcMain.on("pet:drag-start", (event, screenX: unknown, screenY: unknown) => {

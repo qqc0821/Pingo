@@ -1,17 +1,23 @@
 import assert from "node:assert/strict"
-import { mkdtempSync } from "node:fs"
-import { join } from "node:path"
-import { tmpdir } from "node:os"
 import test from "node:test"
+import { compileTerminalIntent } from "../src/main/terminal/intentPolicy.js"
 import { validateCommand } from "../src/main/terminal/commandPolicy.js"
 import { TerminalRunner } from "../src/main/terminal/runner.js"
 
 test("terminal policy accepts only structured read commands and blocks shell semantics", async () => {
-  const root = mkdtempSync(join(tmpdir(), "pingo-terminal-"))
-  const command = validateCommand(root, { executable: "/bin/pwd", args: [], cwd: "." })
-  assert.equal(command.plan.executable, "/bin/pwd")
-  assert.deepEqual(command.plan.args, [])
-  assert.equal(command.plan.cwd.endsWith("/"), false)
+  const root = process.cwd()
+  const command = compileTerminalIntent(
+    { kind: "git.read", action: "status", args: [], cwd: "." },
+    {
+      taskId: "task-terminal",
+      operationId: "operation-terminal",
+      sourceWindowId: "window-a",
+      projectRoot: root,
+    },
+  )
+  assert.equal(command.executable.displayName, "git")
+  assert.deepEqual(command.argv, ["--no-pager", "status"])
+  assert.equal(command.cwd.relativePath, ".")
 
   assert.throws(
     () => validateCommand(root, { executable: "/bin/sh", args: ["-c", "pwd"], cwd: "." }),
@@ -31,7 +37,7 @@ test("terminal policy accepts only structured read commands and blocks shell sem
     /npm run/,
   )
 
-  const result = await new TerminalRunner().run(command.plan)
+  const result = await new TerminalRunner().run(command)
   assert.equal(result.exitCode, 0)
-  assert.match(result.content, /pingo-terminal-/)
+  assert.match(result.content, /On branch|working tree|Changes|nothing to commit/i)
 })
