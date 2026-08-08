@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { ChatStreamEvent, PingoAPI, WindowAppearance, WindowState } from "../shared/types.js"
+import type {
+  ChatStreamEvent,
+  PetStateEvent,
+  PingoAPI,
+  WindowAppearance,
+  WindowState,
+} from "../shared/types.js"
 
 const api: PingoAPI = {
   platform: process.platform,
@@ -13,20 +19,38 @@ const api: PingoAPI = {
     onWindowState: (listener) => subscribe("pingo:window-state", listener),
     onSettingsRequest: (listener) => subscribe("pingo:settings-request", listener),
     onAppearance: (listener) => subscribe("pingo:appearance", listener),
-  },
-  chat: {
-    send: (messages) => ipcRenderer.invoke("chat:send", messages),
-    cancel: () => ipcRenderer.send("chat:cancel"),
-    onEvent: (listener) => subscribe("pingo:chat-event", listener),
+    onStateChange: (listener) => subscribe("pingo:pet-state", listener),
   },
   project: {
     get: () => ipcRenderer.invoke("project:get"),
     choose: () => ipcRenderer.invoke("project:choose"),
     revoke: () => ipcRenderer.invoke("project:revoke"),
   },
+  trustedWorkspace: {
+    get: () => ipcRenderer.invoke("trusted-workspace:get"),
+    choose: () => ipcRenderer.invoke("trusted-workspace:choose"),
+    disable: () => ipcRenderer.invoke("trusted-workspace:disable"),
+    forget: () => ipcRenderer.invoke("trusted-workspace:forget"),
+  },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     update: (settings) => ipcRenderer.invoke("settings:update", settings),
+  },
+  task: {
+    submit: (messages) => ipcRenderer.invoke("task:submit", messages),
+    cancel: (taskId) => ipcRenderer.send("task:cancel", taskId),
+    decide: (decision) => ipcRenderer.invoke("task:decide", decision),
+    undo: (taskId, undoId) => ipcRenderer.invoke("task:undo", { taskId, undoId }),
+    grant: (request) => ipcRenderer.invoke("task:grant", request),
+    deny: (taskId) => ipcRenderer.invoke("task:deny", taskId),
+    onEvent: (listener) => subscribe("pingo:task-event", listener),
+  },
+  audit: {
+    list: () => ipcRenderer.invoke("audit:list"),
+  },
+  capabilities: {
+    list: () => ipcRenderer.invoke("capabilities:list"),
+    revoke: (grantId) => ipcRenderer.invoke("capabilities:revoke", grantId),
   },
 }
 
@@ -37,13 +61,14 @@ function subscribe(
   listener: (state: WindowState) => void,
 ): () => void
 function subscribe(channel: "pingo:settings-request", listener: () => void): () => void
-function subscribe(
-  channel: "pingo:chat-event",
-  listener: (event: ChatStreamEvent) => void,
-): () => void
+function subscribe(channel: "pingo:pet-state", listener: (event: PetStateEvent) => void): () => void
 function subscribe(
   channel: "pingo:appearance",
   listener: (appearance: WindowAppearance) => void,
+): () => void
+function subscribe(
+  channel: "pingo:task-event",
+  listener: (event: ChatStreamEvent) => void,
 ): () => void
 function subscribe(channel: string, listener: (...args: never[]) => void): () => void {
   const wrappedListener = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => {

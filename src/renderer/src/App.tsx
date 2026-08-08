@@ -7,79 +7,82 @@ import type {
   PointerEvent,
   ReactElement,
 } from "react"
+import petGentleImage from "../../assets/pet-gentle.png"
 import petImage from "../../assets/pet.png"
+import petHappyImage from "../../assets/pet-happy.png"
+import petThinkingImage from "../../assets/pet-thinking.png"
 import type {
   AppSettings,
+  ApprovalRequest,
+  AuditRecord,
+  CapabilityGrant,
+  Capability,
   ChatMessageInput,
   ChatStreamEvent,
+  OperationDecision,
+  OperationResult,
   PetState,
+  TaskState,
+  TrustedWorkspace,
   UserPreferences,
 } from "../../shared/types.js"
 
-type ChatRole = "user" | "assistant" | "error"
-type ChatStatus = "ready" | "streaming" | "failed"
+type IconName = "arrow-left" | "check" | "close" | "info" | "send" | "settings" | "stop" | "tool"
+type PetImageKey = "idle" | "happy" | "thinking" | "gentle"
+type LocalMessageRole = "user" | "assistant" | "error"
 
-interface ChatMessage {
+interface LocalMessage {
   id: string
-  role: ChatRole
+  role: LocalMessageRole
   content: string
 }
 
-const MAX_MESSAGES = 50
-const STORAGE_KEY = "pingo:chat-messages"
-const PET_STATE_LABELS: Record<PetState, string> = {
-  idle: "待机中",
-  thinking: "思考中",
-  success: "完成",
-  error: "需要注意",
+interface PendingPermission {
+  taskId: string
+  capabilities: Capability[]
+  scopeRoots: string[]
 }
 
-const INITIAL_MESSAGES: ChatMessage[] = [
-  {
-    id: "welcome",
-    role: "assistant",
-    content: "你好！这是 Pingo 的本地聊天预览。下一阶段我会接入真实模型。",
-  },
-]
+const STORAGE_KEY = "pingo:task-messages"
+const TRUSTED_WORKSPACE_PROMPTED_KEY = "pingo:trusted-workspace-prompted"
+const MAX_MESSAGES = 40
+const HAPPY_STATE_DURATION_MS = 1800
+const POINTER_TAP_THRESHOLD_PX = 4
 
-type IconName =
-  | "arrow-left"
-  | "check"
-  | "close"
-  | "error"
-  | "info"
-  | "send"
-  | "settings"
-  | "sparkles"
-  | "stop"
-  | "tool"
-  | "trash"
+const PET_IMAGES: Record<PetImageKey, string> = {
+  idle: petImage,
+  happy: petHappyImage,
+  thinking: petThinkingImage,
+  gentle: petGentleImage,
+}
+const PET_IMAGE_ENTRIES = Object.entries(PET_IMAGES) as Array<[PetImageKey, string]>
+const PET_STATE_CONFIG: Record<PetState, { image: PetImageKey; label: string }> = {
+  idle: { image: "idle", label: "待机中" },
+  happy: { image: "happy", label: "开心" },
+  thinking: { image: "thinking", label: "思考中" },
+  nod: { image: "gentle", label: "点头" },
+  worried: { image: "thinking", label: "需要你确认" },
+  encourage: { image: "happy", label: "鼓励" },
+  sleepy: { image: "gentle", label: "困倦" },
+  reminder: { image: "thinking", label: "等待授权" },
+  focus: { image: "gentle", label: "专注陪伴" },
+  celebrate: { image: "happy", label: "完成庆祝" },
+}
 
 const ICON_PATHS: Record<IconName, readonly string[]> = {
   "arrow-left": ["M19 12H5", "m12 19-7-7 7-7"],
   check: ["m5 12 4 4L19 6"],
   close: ["M18 6 6 18", "m6 6 12 12"],
-  error: [
-    "M12 8v4",
-    "M12 16h.01",
-    "M10.3 3.7 2.2 17.8A1.5 1.5 0 0 0 3.5 20h17a1.5 1.5 0 0 0 1.3-2.2L13.7 3.7a2 2 0 0 0-3.4 0Z",
-  ],
-  info: ["M12 16v-4", "M12 8h.01", "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"],
+  info: ["M12 16v-4", "M12 8h.01", "M21 12a9 9 0 1 1-18 0Z"],
   send: ["m22 2-7 20-4-9-9-4Z", "M22 2 11 13"],
   settings: [
     "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z",
     "M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2 3.4-.2-.1a1.7 1.7 0 0 0-1.8.2l-.5.3a1.7 1.7 0 0 0-.9 1.5v.2h-4v-.2a1.7 1.7 0 0 0-.9-1.5l-.5-.3a1.7 1.7 0 0 0-1.8-.2l-.2.1-2-3.4.1-.1a1.7 1.7 0 0 0 .3-1.9l-.3-.5a1.7 1.7 0 0 0-1.5-.8H3v-4h.2a1.7 1.7 0 0 0 1.5-.8l.3-.5a1.7 1.7 0 0 0-.3-1.9l-.1-.1 2-3.4.2.1a1.7 1.7 0 0 0 1.8-.2l.5-.3a1.7 1.7 0 0 0 .9-1.5V2h4v.2a1.7 1.7 0 0 0 .9 1.5l.5.3a1.7 1.7 0 0 0 1.8.2l.2-.1 2 3.4-.1.1a1.7 1.7 0 0 0-.3 1.9l.3.5a1.7 1.7 0 0 0 1.5.8h.2v4h-.2a1.7 1.7 0 0 0-1.5.8Z",
   ],
-  sparkles: [
-    "m12 3-1.2 3.3L7.5 7.5l3.3 1.2L12 12l1.2-3.3 3.3-1.2-3.3-1.2Z",
-    "m5 13-.8 2.2L2 16l2.2.8L5 19l.8-2.2L8 16l-2.2-.8Z",
-    "m18.5 14-1 2.5-2.5 1 2.5 1 1 2.5 1-2.5 2.5-1-2.5-1Z",
-  ],
   stop: ["M7 7h10v10H7z"],
   tool: [
     "M14.7 6.3a4 4 0 0 0-5-5L12 3.6 9.6 6 7.3 3.7a4 4 0 0 0 5 5L4 17l3 3 8.3-8.3a4 4 0 0 0 5-5L18 9l-2.4-2.4 2.3-2.3a4 4 0 0 0-3.2 2Z",
   ],
-  trash: ["M4 7h16", "M9 7V4h6v3", "m6 7 1 14h10l1-14", "M10 11v6", "M14 11v6"],
 }
 
 function Icon({ name }: { name: IconName }): ReactElement {
@@ -94,83 +97,88 @@ function Icon({ name }: { name: IconName }): ReactElement {
 
 export function App(): ReactElement {
   const [expanded, setExpanded] = useState(false)
-  const [petState, setPetState] = useState<PetState>("idle")
-  const [notice, setNotice] = useState("点击我展开聊天面板")
-  const [messages, setMessages] = useState<ChatMessage[]>(loadMessages)
-  const [draft, setDraft] = useState("")
-  const [chatStatus, setChatStatus] = useState<ChatStatus>("ready")
-  const [toolActivity, setToolActivity] = useState("")
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [settingsDraft, setSettingsDraft] = useState<UserPreferences | null>(null)
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [settingsNotice, setSettingsNotice] = useState("")
+  const [grants, setGrants] = useState<CapabilityGrant[]>([])
+  const [trustedWorkspace, setTrustedWorkspace] = useState<TrustedWorkspace | null>(null)
+  const [trustedWorkspaceBusy, setTrustedWorkspaceBusy] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const [auditRecords, setAuditRecords] = useState<AuditRecord[]>([])
   const [appearanceScale, setAppearanceScale] = useState(1)
-  const dragStart = useRef<{ x: number; y: number } | null>(null)
-  const didDrag = useRef(false)
-  const activeAssistantId = useRef<string | null>(null)
+  const [petState, setPetState] = useState<PetState>("idle")
+  const [petStateRevision, setPetStateRevision] = useState(0)
+  const [messages, setMessages] = useState<LocalMessage[]>(loadMessages)
+  const [draft, setDraft] = useState("")
+  const [taskId, setTaskId] = useState<string | null>(null)
+  const [taskState, setTaskState] = useState<TaskState | "ready">("ready")
+  const [notice, setNotice] = useState("提出任务，Pingo 会在需要时先请求授权。")
+  const [toolActivity, setToolActivity] = useState("")
+  const [permission, setPermission] = useState<PendingPermission | null>(null)
+  const [approval, setApproval] = useState<ApprovalRequest | null>(null)
+  const [lastResult, setLastResult] = useState<OperationResult | null>(null)
+  const [permissionBusy, setPermissionBusy] = useState(false)
+  const dragStart = useRef<{ x: number; y: number; pointerId: number; didDrag: boolean } | null>(
+    null,
+  )
+  const assistantId = useRef<string | null>(null)
   const messagesEnd = useRef<HTMLDivElement>(null)
+  const petStateTimer = useRef<number | null>(null)
+  const currentPetState = PET_STATE_CONFIG[petState]
 
-  const stopStreaming = useCallback(() => {
-    if (activeAssistantId.current !== null) window.pingo.chat.cancel()
-    activeAssistantId.current = null
-    setChatStatus((current) => (current === "streaming" ? "ready" : current))
+  useEffect(() => {
+    let active = true
+    void window.pingo.trustedWorkspace
+      .get()
+      .then((workspace) => {
+        if (!active) return
+        setTrustedWorkspace(workspace)
+        if (!workspace && localStorage.getItem(TRUSTED_WORKSPACE_PROMPTED_KEY) !== "1") {
+          setExpanded(true)
+          setOnboardingOpen(true)
+          void window.pingo.pet.setExpanded(true)
+        }
+      })
+      .catch(() => {
+        // Keep the normal task surface available if the first-run check fails.
+      })
+    return () => {
+      active = false
+    }
   }, [])
 
-  const handleChatEvent = useCallback((event: ChatStreamEvent) => {
-    const assistantId = activeAssistantId.current
-    if (event.type === "start") {
-      setChatStatus("streaming")
-      setPetState("thinking")
-      setNotice("Pingo 正在组织回答…")
-      setToolActivity("")
-      return
+  useEffect(() => {
+    for (const imageSource of new Set(Object.values(PET_IMAGES))) {
+      const image = new window.Image()
+      image.decoding = "async"
+      image.src = imageSource
     }
-    if (event.type === "tool") {
-      setToolActivity(event.detail)
-      setNotice(`正在使用只读工具：${event.name}`)
-      return
-    }
-    if (!assistantId) return
+  }, [])
 
-    if (event.type === "chunk") {
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === assistantId
-            ? { ...message, content: `${message.content}${event.content}` }
-            : message,
-        ),
-      )
-      return
-    }
-    if (event.type === "done") {
-      activeAssistantId.current = null
-      setChatStatus("ready")
-      setPetState("success")
-      setNotice("回答完成")
-      setToolActivity("")
-      return
-    }
-    if (event.type === "cancelled") {
-      activeAssistantId.current = null
-      setChatStatus("ready")
-      setPetState("idle")
-      setToolActivity("")
-      return
-    }
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-MAX_MESSAGES)))
+    messagesEnd.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages])
 
-    activeAssistantId.current = null
-    setChatStatus("failed")
-    setPetState("error")
-    setNotice(event.message)
-    setToolActivity("")
-    setMessages((current) =>
-      current.map((message) =>
-        message.id === assistantId
-          ? { ...message, role: "error", content: event.message }
-          : message,
-      ),
-    )
+  useEffect(() => {
+    return () => {
+      if (petStateTimer.current !== null) window.clearTimeout(petStateTimer.current)
+    }
+  }, [])
+
+  const showPetState = useCallback((nextState: PetState, durationMs?: number) => {
+    if (petStateTimer.current !== null) window.clearTimeout(petStateTimer.current)
+    setPetState(nextState)
+    setPetStateRevision((current) => current + 1)
+    if (durationMs && durationMs > 0 && nextState !== "idle") {
+      petStateTimer.current = window.setTimeout(() => {
+        setPetState("idle")
+        setPetStateRevision((current) => current + 1)
+        petStateTimer.current = null
+      }, durationMs)
+    }
   }, [])
 
   const openSettings = useCallback(async () => {
@@ -178,10 +186,19 @@ export function App(): ReactElement {
     setSettingsOpen(true)
     setSettingsBusy(true)
     setSettingsNotice("")
+    void window.pingo.pet.setExpanded(true)
     try {
-      const current = await window.pingo.settings.get()
+      const [current, currentGrants, currentAudit] = await Promise.all([
+        window.pingo.settings.get(),
+        window.pingo.capabilities.list(),
+        window.pingo.audit.list(),
+      ])
+      const currentTrustedWorkspace = await window.pingo.trustedWorkspace.get()
       setSettings(current)
       setSettingsDraft(current)
+      setGrants(currentGrants)
+      setAuditRecords(currentAudit)
+      setTrustedWorkspace(currentTrustedWorkspace)
     } catch {
       setSettingsNotice("设置读取失败，请重试。")
     } finally {
@@ -189,70 +206,211 @@ export function App(): ReactElement {
     }
   }, [])
 
+  const closeSettings = useCallback(() => setSettingsOpen(false), [])
+
+  const chooseTrustedWorkspace = useCallback(async () => {
+    setTrustedWorkspaceBusy(true)
+    try {
+      const workspace = await window.pingo.trustedWorkspace.choose()
+      if (workspace) {
+        setTrustedWorkspace(workspace)
+        setOnboardingOpen(false)
+        localStorage.setItem(TRUSTED_WORKSPACE_PROMPTED_KEY, "1")
+        setGrants(await window.pingo.capabilities.list())
+        setSettingsNotice("已持续授权该目录，目录内文件操作不会重复询问。")
+      }
+    } catch {
+      setSettingsNotice("目录授权失败，请重试。")
+    } finally {
+      setTrustedWorkspaceBusy(false)
+    }
+  }, [])
+
+  const disableTrustedWorkspace = useCallback(async () => {
+    setTrustedWorkspaceBusy(true)
+    try {
+      const disabled = await window.pingo.trustedWorkspace.disable()
+      if (disabled) {
+        setTrustedWorkspace(null)
+        setGrants(await window.pingo.capabilities.list())
+        setSettingsNotice("已关闭持续授权；目录记录仍保留。")
+      }
+    } catch {
+      setSettingsNotice("关闭持续授权失败，请重试。")
+    } finally {
+      setTrustedWorkspaceBusy(false)
+    }
+  }, [])
+
+  const forgetTrustedWorkspace = useCallback(async () => {
+    setTrustedWorkspaceBusy(true)
+    try {
+      const forgotten = await window.pingo.trustedWorkspace.forget()
+      if (forgotten) {
+        setTrustedWorkspace(null)
+        setGrants([])
+        setSettingsNotice("已忘记目录；下次使用时需要重新选择。")
+      }
+    } catch {
+      setSettingsNotice("忘记目录失败，请重试。")
+    } finally {
+      setTrustedWorkspaceBusy(false)
+    }
+  }, [])
+
+  const handleTaskEvent = useCallback(
+    (event: ChatStreamEvent) => {
+      if (event.type === "start") {
+        setNotice("Pingo 正在组织任务…")
+        setTaskState("planning")
+        showPetState("thinking")
+        return
+      }
+      if (event.type === "task-state") {
+        setTaskState(event.state)
+        if (event.state === "awaiting_permission") {
+          setNotice("需要你授予目录能力")
+          showPetState("reminder")
+        } else if (event.state === "awaiting_confirmation") {
+          setNotice("请检查操作预览并决定是否允许一次")
+          showPetState("worried")
+        } else if (event.state === "executing") {
+          setNotice("正在执行已确认操作")
+          showPetState("thinking")
+        } else if (event.state === "completed") {
+          setNotice("任务完成")
+          showPetState("celebrate", HAPPY_STATE_DURATION_MS)
+        } else if (event.state === "cancelled") {
+          setNotice("任务已取消")
+          showPetState("idle")
+        } else if (event.state === "failed") {
+          setNotice("任务失败，请查看 Pingo 的说明")
+          showPetState("worried")
+        }
+        return
+      }
+      if (event.type === "capability-request") {
+        setTaskId(event.taskId)
+        setPermission({
+          taskId: event.taskId,
+          capabilities: event.capabilities,
+          scopeRoots: event.scopeRoots,
+        })
+        return
+      }
+      if (event.type === "approval-request") {
+        setTaskId(event.request.taskId)
+        setApproval(event.request)
+        return
+      }
+      if (event.type === "operation-result") {
+        setLastResult(event.result)
+        if (event.result.status !== "completed") setNotice(event.result.detail)
+        return
+      }
+      if (event.type === "tool") {
+        setToolActivity(event.detail)
+        return
+      }
+      const currentAssistantId = assistantId.current
+      if (event.type === "chunk" && currentAssistantId) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === currentAssistantId
+              ? { ...message, content: `${message.content}${event.content}` }
+              : message,
+          ),
+        )
+      } else if (event.type === "done") {
+        assistantId.current = null
+        setToolActivity("")
+      } else if (event.type === "cancelled") {
+        assistantId.current = null
+        setTaskState("cancelled")
+        setNotice("任务已取消")
+        showPetState("idle")
+      } else if (event.type === "error") {
+        assistantId.current = null
+        setTaskState("failed")
+        setNotice(event.message)
+        showPetState("worried")
+        if (currentAssistantId) {
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === currentAssistantId
+                ? { ...message, role: "error", content: event.message }
+                : message,
+            ),
+          )
+        }
+      }
+    },
+    [showPetState],
+  )
+
   useEffect(() => {
-    const removeWindowStateListener = window.pingo.pet.onWindowState((state) => {
-      setExpanded(state.expanded)
-    })
-    const removeSettingsListener = window.pingo.pet.onSettingsRequest(() => {
-      void openSettings()
-    })
-    const removeAppearanceListener = window.pingo.pet.onAppearance((appearance) => {
-      setAppearanceScale(appearance.scale)
-    })
+    const removeWindowState = window.pingo.pet.onWindowState((state) => setExpanded(state.expanded))
+    const removeSettings = window.pingo.pet.onSettingsRequest(() => void openSettings())
+    const removeAppearance = window.pingo.pet.onAppearance((appearance) =>
+      setAppearanceScale(appearance.scale),
+    )
+    const removePetState = window.pingo.pet.onStateChange((event) =>
+      showPetState(event.state, event.durationMs),
+    )
+    const removeTask = window.pingo.task.onEvent(handleTaskEvent)
     return () => {
-      removeWindowStateListener()
-      removeSettingsListener()
-      removeAppearanceListener()
-      stopStreaming()
+      removeWindowState()
+      removeSettings()
+      removeAppearance()
+      removePetState()
+      removeTask()
     }
-  }, [openSettings, stopStreaming])
-
-  useEffect(() => {
-    const removeChatListener = window.pingo.chat.onEvent(handleChatEvent)
-    return removeChatListener
-  }, [handleChatEvent])
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-MAX_MESSAGES)))
-    messagesEnd.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
-
-  const togglePanel = useCallback(() => {
-    if (didDrag.current) {
-      didDrag.current = false
-      return
-    }
-
-    const nextExpanded = !expanded
-    setExpanded(nextExpanded)
-    setPetState("idle")
-    setNotice(nextExpanded ? "聊天面板已展开" : "点击我展开聊天面板")
-    void window.pingo.pet.setExpanded(nextExpanded)
-  }, [expanded])
+  }, [handleTaskEvent, openSettings, showPetState])
 
   const handlePointerDown = useCallback((event: PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return
     event.currentTarget.setPointerCapture(event.pointerId)
-    dragStart.current = { x: event.screenX, y: event.screenY }
-    didDrag.current = false
+    dragStart.current = {
+      x: event.screenX,
+      y: event.screenY,
+      pointerId: event.pointerId,
+      didDrag: false,
+    }
     window.pingo.pet.dragStart(event.screenX, event.screenY)
   }, [])
 
   const handlePointerMove = useCallback((event: PointerEvent<HTMLButtonElement>) => {
-    const start = dragStart.current
-    if (!start) return
-    if (Math.abs(event.screenX - start.x) > 3 || Math.abs(event.screenY - start.y) > 3) {
-      didDrag.current = true
-    }
-    window.pingo.pet.dragMove(event.screenX, event.screenY)
+    const session = dragStart.current
+    if (!session || session.pointerId !== event.pointerId) return
+    if (Math.hypot(event.screenX - session.x, event.screenY - session.y) > POINTER_TAP_THRESHOLD_PX)
+      session.didDrag = true
+    if (session.didDrag) window.pingo.pet.dragMove(event.screenX, event.screenY)
   }, [])
 
-  const handlePointerUp = useCallback((event: PointerEvent<HTMLButtonElement>) => {
-    if (!dragStart.current) return
+  const handlePointerUp = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      const session = dragStart.current
+      if (!session || session.pointerId !== event.pointerId) return
+      dragStart.current = null
+      if (event.currentTarget.hasPointerCapture(event.pointerId))
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      window.pingo.pet.dragEnd()
+      if (
+        !session.didDrag &&
+        Math.hypot(event.screenX - session.x, event.screenY - session.y) <= POINTER_TAP_THRESHOLD_PX
+      ) {
+        const nextExpanded = !expanded
+        setExpanded(nextExpanded)
+        void window.pingo.pet.setExpanded(nextExpanded)
+        if (!nextExpanded) showPetState("happy", HAPPY_STATE_DURATION_MS)
+      }
+    },
+    [expanded, showPetState],
+  )
+
+  const handlePointerCancel = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    if (!dragStart.current || dragStart.current.pointerId !== event.pointerId) return
     dragStart.current = null
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
     window.pingo.pet.dragEnd()
   }, [])
 
@@ -261,65 +419,109 @@ export function App(): ReactElement {
     window.pingo.pet.showContextMenu()
   }, [])
 
-  const sendMessage = useCallback(
-    (event?: FormEvent) => {
+  const stopTask = useCallback(() => {
+    if (taskId) window.pingo.task.cancel(taskId)
+    assistantId.current = null
+    setTaskState("cancelled")
+    setApproval(null)
+    setPermission(null)
+    setNotice("已取消当前任务")
+    showPetState("idle")
+  }, [showPetState, taskId])
+
+  const submitTask = useCallback(
+    async (event?: FormEvent) => {
       event?.preventDefault()
       const content = draft.trim()
-      if (!content || chatStatus === "streaming") return
-
-      const assistantId = `assistant-${Date.now()}`
-      stopStreaming()
-      setDraft("")
-      setChatStatus("streaming")
-      setPetState("thinking")
-      setNotice("Pingo 正在组织回答…")
-      activeAssistantId.current = assistantId
-      const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: "user", content }
-      const nextMessages = trimMessages([
-        ...messages,
-        userMessage,
-        { id: assistantId, role: "assistant", content: "" },
-      ])
+      if (
+        !content ||
+        (taskState !== "ready" && !["completed", "failed", "cancelled"].includes(taskState))
+      )
+        return
+      const userMessage: LocalMessage = { id: `user-${Date.now()}`, role: "user", content }
+      const assistantMessage: LocalMessage = {
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        content: "",
+      }
+      const nextMessages: LocalMessage[] = [...messages, userMessage, assistantMessage].slice(
+        -MAX_MESSAGES,
+      )
+      const nextAssistant = nextMessages.at(-1)
+      if (!nextAssistant) return
+      assistantId.current = nextAssistant.id
       setMessages(nextMessages)
-
-      const modelMessages = buildModelHistory([...messages, userMessage])
-      void window.pingo.chat.send(modelMessages).catch(() => {
-        if (activeAssistantId.current !== assistantId) return
-        activeAssistantId.current = null
-        setChatStatus("failed")
-        setPetState("error")
-        setNotice("无法启动模型请求，请检查配置。")
-        setMessages((current) =>
-          current.map((message) =>
-            message.id === assistantId
-              ? { ...message, role: "error", content: "无法启动模型请求，请检查配置。" }
-              : message,
-          ),
-        )
-      })
+      setDraft("")
+      setApproval(null)
+      setPermission(null)
+      setLastResult(null)
+      setTaskState("proposed")
+      setNotice("正在提交任务…")
+      try {
+        const response = await window.pingo.task.submit(buildModelHistory(nextMessages))
+        setTaskId(response.taskId)
+      } catch {
+        assistantId.current = null
+        setTaskState("failed")
+        setNotice("任务提交失败，请重试。")
+      }
     },
-    [chatStatus, draft, messages, stopStreaming],
+    [draft, messages, taskState],
   )
 
-  const handleStop = useCallback(() => {
-    stopStreaming()
-    setPetState("idle")
-    setNotice("已停止生成")
-    setToolActivity("")
-    setMessages((current) => {
-      const last = current.at(-1)
-      if (!last || last.role !== "assistant" || last.content.length === 0) return current
-      return [...current.slice(0, -1), { ...last, content: `${last.content}\n\n（已停止）` }]
-    })
-  }, [stopStreaming])
+  const handleDraftKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault()
+        void submitTask()
+      }
+    },
+    [submitTask],
+  )
 
-  const clearConversation = useCallback(() => {
-    handleStop()
-    localStorage.removeItem(STORAGE_KEY)
-    setMessages([])
-    setPetState("idle")
-    setNotice("会话已清空")
-  }, [handleStop])
+  const grantPermission = useCallback(async () => {
+    if (!permission) return
+    setPermissionBusy(true)
+    try {
+      const grant = await window.pingo.task.grant({
+        taskId: permission.taskId,
+        capabilities: permission.capabilities,
+        duration: "session",
+      })
+      if (!grant) setNotice("未授予权限，操作不会执行。")
+      setPermission(null)
+    } catch {
+      setNotice("权限申请失败，操作不会执行。")
+    } finally {
+      setPermissionBusy(false)
+    }
+  }, [permission])
+
+  const denyPermission = useCallback(async () => {
+    if (!permission) return
+    await window.pingo.task.deny(permission.taskId)
+    setPermission(null)
+    setNotice("已拒绝权限，操作不会执行。")
+  }, [permission])
+
+  const decideApproval = useCallback(
+    async (decision: OperationDecision["decision"]) => {
+      if (!approval) return
+      await window.pingo.task.decide({
+        taskId: approval.taskId,
+        operationId: approval.operationId,
+        decision,
+      })
+      setApproval(null)
+    },
+    [approval],
+  )
+
+  const undoLast = useCallback(async () => {
+    if (!lastResult?.undoId || !taskId) return
+    await window.pingo.task.undo(taskId, lastResult.undoId)
+    setLastResult(null)
+  }, [lastResult, taskId])
 
   const saveSettings = useCallback(async () => {
     if (!settingsDraft) return
@@ -330,7 +532,6 @@ export function App(): ReactElement {
       setSettings(saved)
       setSettingsDraft(saved)
       setSettingsNotice("设置已保存")
-      setNotice("设置已更新")
     } catch {
       setSettingsNotice("设置无效或保存失败，请检查输入。")
     } finally {
@@ -338,26 +539,11 @@ export function App(): ReactElement {
     }
   }, [settingsDraft])
 
-  const handleDraftKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault()
-        sendMessage()
-      }
-    },
-    [sendMessage],
-  )
-
-  const statusLabel = settingsOpen ? "设置" : toolActivity || notice
-  const statusIcon: IconName = settingsOpen
-    ? "settings"
-    : toolActivity
-      ? "tool"
-      : petState === "error"
-        ? "error"
-        : petState === "success"
-          ? "check"
-          : "sparkles"
+  const revokeGrant = useCallback(async (grantId: string) => {
+    await window.pingo.capabilities.revoke(grantId)
+    setGrants(await window.pingo.capabilities.list())
+    setSettingsNotice("授权已撤销，关联任务已停止。")
+  }, [])
 
   return (
     <main
@@ -365,24 +551,33 @@ export function App(): ReactElement {
       style={{ "--pet-scale": appearanceScale } as CSSProperties}
     >
       {expanded && (
-        <section className="chat-panel" aria-label="Pingo 聊天面板">
-          <header className="chat-header">
-            <div
-              className={`panel-status panel-status--${petState}`}
-              role="status"
-              aria-label={statusLabel}
-              title={statusLabel}
-            >
-              <Icon name={statusIcon} />
+        <section className="task-panel" aria-label="Pingo 任务面板">
+          <header className="task-header">
+            <div className={`panel-status panel-status--${taskState}`} role="status">
+              <Icon
+                name={
+                  settingsOpen
+                    ? "settings"
+                    : approval || permission
+                      ? "info"
+                      : taskState === "executing"
+                        ? "tool"
+                        : "send"
+                }
+              />
+            </div>
+            <div className="task-header-title">
+              <strong>{settingsOpen ? "设置" : "Pingo 任务"}</strong>
+              <span>{settingsOpen ? "本地配置" : formatTaskState(taskState)}</span>
             </div>
             <div className="header-actions">
               {settingsOpen ? (
                 <button
                   className="icon-button"
                   type="button"
-                  aria-label="返回聊天"
-                  title="返回聊天"
-                  onClick={() => setSettingsOpen(false)}
+                  aria-label="返回任务"
+                  title="返回"
+                  onClick={closeSettings}
                 >
                   <Icon name="arrow-left" />
                 </button>
@@ -392,7 +587,7 @@ export function App(): ReactElement {
                   type="button"
                   aria-label="打开设置"
                   title="设置"
-                  onClick={openSettings}
+                  onClick={() => void openSettings()}
                 >
                   <Icon name="settings" />
                 </button>
@@ -400,9 +595,12 @@ export function App(): ReactElement {
               <button
                 className="icon-button"
                 type="button"
-                aria-label="收起聊天面板"
+                aria-label="收起任务面板"
                 title="收起"
-                onClick={togglePanel}
+                onClick={() => {
+                  setExpanded(false)
+                  void window.pingo.pet.setExpanded(false)
+                }}
               >
                 <Icon name="close" />
               </button>
@@ -410,182 +608,157 @@ export function App(): ReactElement {
           </header>
 
           {settingsOpen ? (
-            <div className="settings-view">
-              <h2 className="visually-hidden">设置</h2>
-              {settingsDraft ? (
-                <div className="settings-form">
-                  <label>
-                    <span>模型接口</span>
-                    <input
-                      value={settingsDraft.modelBaseUrl}
-                      disabled={settingsBusy}
-                      onChange={(event) =>
-                        setSettingsDraft((current) =>
-                          current ? { ...current, modelBaseUrl: event.target.value } : current,
-                        )
-                      }
-                    />
-                  </label>
-                  <label>
-                    <span>模型名称</span>
-                    <input
-                      value={settingsDraft.modelName}
-                      disabled={settingsBusy}
-                      onChange={(event) =>
-                        setSettingsDraft((current) =>
-                          current ? { ...current, modelName: event.target.value } : current,
-                        )
-                      }
-                    />
-                  </label>
-                  <div className="settings-readonly">
-                    <div>
-                      <span>API Key</span>
-                      <strong>{settings?.apiKeyConfigured ? "已配置" : "未配置"}</strong>
-                    </div>
-                    <span
-                      className="info-icon"
-                      role="img"
-                      aria-label="API Key 仅由主进程读取。打包版配置在用户资源库的 Application Support/pingo/.env。"
-                      title="仅使用 MODEL_API_KEY；打包版配置在 ~/Library/Application Support/pingo/.env"
-                    >
-                      <Icon name="info" />
-                    </span>
-                  </div>
-                  <label className="range-setting">
-                    <span>
-                      宠物大小 <strong>{settingsDraft.petScale.toFixed(1)}×</strong>
-                    </span>
-                    <input
-                      type="range"
-                      min="0.7"
-                      max="1.4"
-                      step="0.1"
-                      value={settingsDraft.petScale}
-                      disabled={settingsBusy}
-                      onChange={(event) =>
-                        setSettingsDraft((current) =>
-                          current ? { ...current, petScale: Number(event.target.value) } : current,
-                        )
-                      }
-                    />
-                  </label>
-                  <label className="range-setting">
-                    <span>
-                      透明度 <strong>{Math.round(settingsDraft.transparency * 100)}%</strong>
-                    </span>
-                    <input
-                      type="range"
-                      min="0.5"
-                      max="1"
-                      step="0.05"
-                      value={settingsDraft.transparency}
-                      disabled={settingsBusy}
-                      onChange={(event) =>
-                        setSettingsDraft((current) =>
-                          current
-                            ? { ...current, transparency: Number(event.target.value) }
-                            : current,
-                        )
-                      }
-                    />
-                  </label>
-                  <label className="checkbox-setting">
-                    <input
-                      type="checkbox"
-                      checked={settingsDraft.launchAtLogin}
-                      disabled={settingsBusy}
-                      onChange={(event) =>
-                        setSettingsDraft((current) =>
-                          current ? { ...current, launchAtLogin: event.target.checked } : current,
-                        )
-                      }
-                    />
-                    <span>登录 macOS 后自动启动</span>
-                  </label>
-                  <div className="settings-actions">
-                    <button
-                      className="icon-button icon-button--primary"
-                      type="button"
-                      disabled={settingsBusy}
-                      aria-label={settingsBusy ? "正在保存设置" : "保存设置"}
-                      title={settingsBusy ? "保存中" : "保存"}
-                      onClick={saveSettings}
-                    >
-                      <Icon name="check" />
-                    </button>
-                  </div>
-                  {settingsNotice && <p className="settings-notice">{settingsNotice}</p>}
-                </div>
-              ) : (
-                <div className="settings-loading" role="status">
-                  <span className="loading-ring" aria-hidden="true" />
-                  <span className="visually-hidden">正在读取设置</span>
-                </div>
-              )}
-            </div>
+            <SettingsView
+              settings={settings}
+              draft={settingsDraft}
+              busy={settingsBusy}
+              notice={settingsNotice}
+              grants={grants}
+              auditRecords={auditRecords}
+              trustedWorkspace={trustedWorkspace}
+              trustedWorkspaceBusy={trustedWorkspaceBusy}
+              setDraft={setSettingsDraft}
+              save={saveSettings}
+              chooseTrustedWorkspace={chooseTrustedWorkspace}
+              disableTrustedWorkspace={disableTrustedWorkspace}
+              forgetTrustedWorkspace={forgetTrustedWorkspace}
+              revokeGrant={revokeGrant}
+            />
           ) : (
             <>
+              {onboardingOpen && (
+                <div
+                  className="action-card permission-card"
+                  role="dialog"
+                  aria-label="持续目录授权"
+                >
+                  <strong>选择目录并持续授权</strong>
+                  <p>
+                    授权后，Pingo 可以在所选目录内自动读取、创建、修改、移动文件或将文件移入废纸篓，
+                    不再重复询问。目录外访问、Terminal、项目脚本和系统自动化仍不会被放开。
+                  </p>
+                  <div className="action-buttons">
+                    <button
+                      type="button"
+                      disabled={trustedWorkspaceBusy}
+                      onClick={() => void chooseTrustedWorkspace()}
+                    >
+                      选择目录并授权
+                    </button>
+                    <button
+                      type="button"
+                      className="button-secondary"
+                      disabled={trustedWorkspaceBusy}
+                      onClick={() => {
+                        localStorage.setItem(TRUSTED_WORKSPACE_PROMPTED_KEY, "1")
+                        setOnboardingOpen(false)
+                      }}
+                    >
+                      暂不授权
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="message-list" aria-live="polite">
                 {messages.map((message) => (
-                  <article
-                    key={message.id}
-                    className={`message message--${message.role}`}
-                    aria-label={
-                      message.role === "user"
-                        ? "你的消息"
-                        : message.role === "error"
-                          ? "错误消息"
-                          : "Pingo 的消息"
-                    }
-                  >
-                    {message.content ? (
-                      <p>{message.content}</p>
-                    ) : (
-                      <span className="typing-indicator" aria-label="Pingo 正在思考">
-                        <i />
-                        <i />
-                        <i />
-                      </span>
-                    )}
+                  <article key={message.id} className={`message message--${message.role}`}>
+                    <p>{message.content || (message.id === assistantId.current ? "…" : "")}</p>
                   </article>
                 ))}
                 <div ref={messagesEnd} />
               </div>
-
-              <p className="visually-hidden" role="status" aria-live="polite">
-                {notice}
-              </p>
-
-              <form className="composer" onSubmit={sendMessage}>
+              {permission && (
+                <div
+                  className="action-card permission-card"
+                  role="dialog"
+                  aria-label="请求目录权限"
+                >
+                  <strong>先授权，Pingo 才能访问电脑</strong>
+                  <p>
+                    能力：{permission.capabilities.join("、")}
+                    <br />
+                    范围：{permission.scopeRoots[0] || "需要选择一个目录"}
+                    <br />
+                    本次授权只持续当前会话，可随时撤销。
+                  </p>
+                  <div className="action-buttons">
+                    <button
+                      type="button"
+                      disabled={permissionBusy}
+                      onClick={() => void grantPermission()}
+                    >
+                      授权本次会话
+                    </button>
+                    <button
+                      type="button"
+                      className="button-secondary"
+                      disabled={permissionBusy}
+                      onClick={() => void denyPermission()}
+                    >
+                      拒绝
+                    </button>
+                  </div>
+                </div>
+              )}
+              {approval && (
+                <div className="action-card approval-card" role="dialog" aria-label="操作确认">
+                  <strong>
+                    {approval.plan.risk} · {approval.plan.kind}
+                  </strong>
+                  <p className="risk-reason">{approval.plan.riskReason}</p>
+                  <pre>{approval.plan.preview}</pre>
+                  <p>
+                    可撤销：{approval.plan.reversible ? "是" : "否"} · 仅允许一次 · 预览摘要{" "}
+                    {approval.plan.digest.slice(0, 12)}…
+                  </p>
+                  <div className="action-buttons">
+                    <button type="button" onClick={() => void decideApproval("approve")}>
+                      允许一次
+                    </button>
+                    <button
+                      type="button"
+                      className="button-secondary"
+                      onClick={() => void decideApproval("deny")}
+                    >
+                      拒绝
+                    </button>
+                  </div>
+                </div>
+              )}
+              {lastResult?.undoId && lastResult.status === "completed" && (
+                <div className="result-actions">
+                  <span>这项文件操作可以撤销。</span>
+                  <button type="button" onClick={() => void undoLast()}>
+                    撤销
+                  </button>
+                </div>
+              )}
+              <form className="composer" onSubmit={(event) => void submitTask(event)}>
                 <div className="composer-shell">
                   <textarea
                     value={draft}
-                    rows={2}
-                    disabled={chatStatus === "streaming"}
-                    placeholder="消息"
-                    aria-label="消息内容"
                     onChange={(event) => setDraft(event.target.value)}
                     onKeyDown={handleDraftKeyDown}
+                    disabled={
+                      Boolean(approval || permission || onboardingOpen) ||
+                      taskState === "executing" ||
+                      taskState === "planning"
+                    }
+                    placeholder="告诉 Pingo 要做什么…"
+                    rows={2}
                   />
                   <div className="composer-footer">
-                    <button
-                      className="icon-button icon-button--subtle"
-                      type="button"
-                      disabled={messages.length === 0}
-                      aria-label="清空会话"
-                      title="清空会话"
-                      onClick={clearConversation}
-                    >
-                      <Icon name="trash" />
-                    </button>
-                    {chatStatus === "streaming" ? (
+                    <span>{toolActivity || notice}</span>
+                    {taskState === "planning" ||
+                    taskState === "executing" ||
+                    taskState === "awaiting_permission" ||
+                    taskState === "awaiting_confirmation" ? (
                       <button
-                        className="icon-button icon-button--primary icon-button--stop"
+                        className="icon-button icon-button--stop"
                         type="button"
-                        aria-label="停止生成"
-                        title="停止"
-                        onClick={handleStop}
+                        aria-label="取消任务"
+                        title="取消"
+                        onClick={stopTask}
                       >
                         <Icon name="stop" />
                       </button>
@@ -593,9 +766,9 @@ export function App(): ReactElement {
                       <button
                         className="icon-button icon-button--primary"
                         type="submit"
+                        aria-label="提交任务"
+                        title="提交"
                         disabled={!draft.trim()}
-                        aria-label="发送消息"
-                        title="发送"
                       >
                         <Icon name="send" />
                       </button>
@@ -610,19 +783,35 @@ export function App(): ReactElement {
 
       <div className="pet-dock">
         <button
-          className={`pet-button pet-button--${petState}`}
+          className={`pet-button pet-state-${petState}`}
           type="button"
-          aria-label={expanded ? "收起 Pingo 聊天面板" : "展开 Pingo 聊天面板"}
-          onClick={togglePanel}
+          aria-label={`Pingo 桌面宠物，当前${currentPetState.label}`}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
           onContextMenu={handleContextMenu}
         >
-          <img className="pet-face" src={petImage} alt="" aria-hidden="true" draggable={false} />
+          <span
+            key={`${petState}-${petStateRevision}`}
+            className={`pet-visual pet-motion--${petState}`}
+            aria-hidden="true"
+          >
+            <span className="pet-face-slot">
+              {PET_IMAGE_ENTRIES.map(([imageKey, imageSource]) => (
+                <img
+                  key={imageKey}
+                  className={`pet-face pet-face--${imageKey} ${currentPetState.image === imageKey ? "pet-face--active" : ""}`}
+                  src={imageSource}
+                  alt=""
+                  draggable={false}
+                  decoding="async"
+                />
+              ))}
+            </span>
+          </span>
           <span className="pet-state" aria-hidden="true">
-            {PET_STATE_LABELS[petState]}
+            {currentPetState.label}
           </span>
         </button>
       </div>
@@ -630,36 +819,270 @@ export function App(): ReactElement {
   )
 }
 
-function loadMessages(): ChatMessage[] {
+function SettingsView({
+  settings,
+  draft,
+  busy,
+  notice,
+  grants,
+  auditRecords,
+  trustedWorkspace,
+  trustedWorkspaceBusy,
+  setDraft,
+  save,
+  chooseTrustedWorkspace,
+  disableTrustedWorkspace,
+  forgetTrustedWorkspace,
+  revokeGrant,
+}: {
+  settings: AppSettings | null
+  draft: UserPreferences | null
+  busy: boolean
+  notice: string
+  grants: CapabilityGrant[]
+  auditRecords: AuditRecord[]
+  trustedWorkspace: TrustedWorkspace | null
+  trustedWorkspaceBusy: boolean
+  setDraft: React.Dispatch<React.SetStateAction<UserPreferences | null>>
+  save: () => Promise<void>
+  chooseTrustedWorkspace: () => Promise<void>
+  disableTrustedWorkspace: () => Promise<void>
+  forgetTrustedWorkspace: () => Promise<void>
+  revokeGrant: (grantId: string) => Promise<void>
+}): ReactElement {
+  if (!draft)
+    return (
+      <div className="settings-loading" role="status">
+        <span className="loading-ring" />
+      </div>
+    )
+  return (
+    <div className="settings-view">
+      <div className="settings-form">
+        <label>
+          <span>模型接口</span>
+          <input
+            value={draft.modelBaseUrl}
+            disabled={busy}
+            onChange={(event) =>
+              setDraft((current) =>
+                current ? { ...current, modelBaseUrl: event.target.value } : current,
+              )
+            }
+          />
+        </label>
+        <label>
+          <span>模型名称</span>
+          <input
+            value={draft.modelName}
+            disabled={busy}
+            onChange={(event) =>
+              setDraft((current) =>
+                current ? { ...current, modelName: event.target.value } : current,
+              )
+            }
+          />
+        </label>
+        <label>
+          <span>默认城市</span>
+          <input
+            value={draft.defaultLocation}
+            disabled={busy}
+            placeholder="例如：上海"
+            onChange={(event) =>
+              setDraft((current) =>
+                current ? { ...current, defaultLocation: event.target.value } : current,
+              )
+            }
+          />
+        </label>
+        <div className="settings-readonly">
+          <div>
+            <span>API Key</span>
+            <strong>{settings?.apiKeyConfigured ? "已配置" : "未配置"}</strong>
+          </div>
+          <span className="info-icon" role="img" aria-label="API Key 仅由主进程读取。">
+            <Icon name="info" />
+          </span>
+        </div>
+        <div className="settings-section">
+          <strong>持续目录授权</strong>
+          {trustedWorkspace ? (
+            <>
+              <span>已授权目录：{trustedWorkspace.path}</span>
+              <span>目录内结构化文件操作不会重复询问；Terminal 不包含在内。</span>
+              <div className="grant-row">
+                <button
+                  type="button"
+                  disabled={trustedWorkspaceBusy}
+                  onClick={() => void disableTrustedWorkspace()}
+                >
+                  关闭持续授权
+                </button>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  disabled={trustedWorkspaceBusy}
+                  onClick={() => void forgetTrustedWorkspace()}
+                >
+                  忘记目录
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span>未开启。授权后，所选目录内的文件操作不会重复询问。</span>
+              <button
+                type="button"
+                disabled={trustedWorkspaceBusy}
+                onClick={() => void chooseTrustedWorkspace()}
+              >
+                选择目录并授权
+              </button>
+            </>
+          )}
+        </div>
+        <div className="settings-section">
+          <strong>当前能力授权</strong>
+          {grants.length === 0 ? (
+            <span>没有活动授权</span>
+          ) : (
+            grants.map((grant) => (
+              <div className="grant-row" key={grant.grantId}>
+                <span>
+                  {grant.capabilities.join("、")} · {grant.scopeRoots[0]}
+                </span>
+                <button type="button" onClick={() => void revokeGrant(grant.grantId)}>
+                  撤销
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+        <div className="settings-section">
+          <strong>操作历史</strong>
+          {auditRecords.length === 0 ? (
+            <span>暂无记录</span>
+          ) : (
+            auditRecords
+              .slice(-5)
+              .reverse()
+              .map((record) => (
+                <span className="audit-row" key={record.auditId}>
+                  {record.kind} · {record.status} ·{" "}
+                  {new Date(record.createdAt).toLocaleTimeString()}
+                </span>
+              ))
+          )}
+        </div>
+        <label className="range-setting">
+          <span>
+            宠物大小 <strong>{draft.petScale.toFixed(1)}×</strong>
+          </span>
+          <input
+            type="range"
+            min="0.7"
+            max="1.4"
+            step="0.1"
+            value={draft.petScale}
+            disabled={busy}
+            onChange={(event) =>
+              setDraft((current) =>
+                current ? { ...current, petScale: Number(event.target.value) } : current,
+              )
+            }
+          />
+        </label>
+        <label className="range-setting">
+          <span>
+            透明度 <strong>{Math.round(draft.transparency * 100)}%</strong>
+          </span>
+          <input
+            type="range"
+            min="0.5"
+            max="1"
+            step="0.05"
+            value={draft.transparency}
+            disabled={busy}
+            onChange={(event) =>
+              setDraft((current) =>
+                current ? { ...current, transparency: Number(event.target.value) } : current,
+              )
+            }
+          />
+        </label>
+        <label className="checkbox-setting">
+          <input
+            type="checkbox"
+            checked={draft.launchAtLogin}
+            disabled={busy}
+            onChange={(event) =>
+              setDraft((current) =>
+                current ? { ...current, launchAtLogin: event.target.checked } : current,
+              )
+            }
+          />
+          <span>登录 macOS 后自动启动</span>
+        </label>
+        <div className="settings-actions">
+          <button
+            className="icon-button icon-button--primary"
+            type="button"
+            disabled={busy}
+            aria-label="保存设置"
+            title="保存"
+            onClick={() => void save()}
+          >
+            <Icon name="check" />
+          </button>
+        </div>
+        {notice && <p className="settings-notice">{notice}</p>}
+      </div>
+    </div>
+  )
+}
+
+function loadMessages(): LocalMessage[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return INITIAL_MESSAGES
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return INITIAL_MESSAGES
-    const messages = parsed.filter(isChatMessage)
-    return messages.length > 0 ? messages.slice(-MAX_MESSAGES) : INITIAL_MESSAGES
+    const value: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]")
+    if (!Array.isArray(value)) return []
+    return value.filter(isLocalMessage).slice(-MAX_MESSAGES)
   } catch {
-    return INITIAL_MESSAGES
+    return []
   }
 }
 
-function isChatMessage(value: unknown): value is ChatMessage {
+function isLocalMessage(value: unknown): value is LocalMessage {
   if (typeof value !== "object" || value === null) return false
-  const message = value as Partial<ChatMessage>
+  const message = value as Partial<LocalMessage>
   return (
     typeof message.id === "string" &&
-    (message.role === "user" || message.role === "assistant" || message.role === "error") &&
+    ["user", "assistant", "error"].includes(message.role ?? "") &&
     typeof message.content === "string"
   )
 }
 
-function trimMessages(messages: ChatMessage[]): ChatMessage[] {
-  return messages.slice(-MAX_MESSAGES)
+function buildModelHistory(messages: LocalMessage[]): ChatMessageInput[] {
+  return messages
+    .slice(-24)
+    .filter((message) => message.content || message.role === "assistant")
+    .map((message) => ({
+      role: message.role === "error" ? "assistant" : message.role,
+      content: message.content,
+    }))
 }
 
-function buildModelHistory(messages: ChatMessage[]): ChatMessageInput[] {
-  return messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
-    .slice(-24)
-    .map(({ role, content }) => ({ role: role === "user" ? "user" : "assistant", content }))
+function formatTaskState(state: TaskState | "ready"): string {
+  const labels: Record<TaskState | "ready", string> = {
+    ready: "等待输入",
+    proposed: "已提出",
+    awaiting_permission: "等待授权",
+    planning: "规划中",
+    awaiting_confirmation: "等待确认",
+    executing: "执行中",
+    completed: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+  }
+  return labels[state]
 }

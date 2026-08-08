@@ -1,6 +1,12 @@
 import { BrowserWindow, screen } from "electron"
 import { join } from "node:path"
-import type { WindowAppearance, WindowPosition, WindowState } from "../shared/types.js"
+import type {
+  PetState,
+  PetStateEvent,
+  WindowAppearance,
+  WindowPosition,
+  WindowState,
+} from "../shared/types.js"
 import type { SettingsStore } from "./store.js"
 
 export const COLLAPSED_SIZE = { width: 132, height: 132 }
@@ -50,7 +56,17 @@ export function createPetWindow(store: SettingsStore): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
     },
+  })
+
+  petWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
+  petWindow.webContents.on("will-navigate", (event, url) => {
+    if (!isAllowedNavigation(url)) event.preventDefault()
+  })
+  petWindow.webContents.on("will-redirect", (event, url) => {
+    if (!isAllowedNavigation(url)) event.preventDefault()
   })
 
   petWindow.setAlwaysOnTop(true, "floating")
@@ -76,6 +92,19 @@ export function createPetWindow(store: SettingsStore): BrowserWindow {
   }
 
   return petWindow
+}
+
+function isAllowedNavigation(url: string): boolean {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    try {
+      const allowed = new URL(process.env.ELECTRON_RENDERER_URL)
+      const target = new URL(url)
+      return target.origin === allowed.origin
+    } catch {
+      return false
+    }
+  }
+  return url.startsWith("file://")
 }
 
 export function getPetWindow(): BrowserWindow | null {
@@ -135,13 +164,14 @@ export function hidePetWindow(): void {
   petWindow?.hide()
 }
 
-export function togglePetWindow(): void {
-  if (petWindow?.isVisible()) hidePetWindow()
-  else showPetWindow()
-}
-
 export function sendSettingsRequest(): void {
   petWindow?.webContents.send("pingo:settings-request")
+}
+
+export function sendPetState(state: PetState, durationMs?: number): void {
+  if (!petWindow) return
+  const event: PetStateEvent = durationMs === undefined ? { state } : { state, durationMs }
+  petWindow.webContents.send("pingo:pet-state", event)
 }
 
 export function setPetPreferences(scale: number, opacity: number): void {
