@@ -1031,8 +1031,16 @@ button {
   animation: pet-image-enter 260ms var(--pet-ease-out) both;
 }
 
+.pet-face--video {
+  background: transparent;
+}
+
 .pet-button:is(.pet-state-happy, .pet-state-encourage, .pet-state-celebrate) .pet-face--active {
   filter: blur(0) brightness(1.04) saturate(1.08) drop-shadow(0 6px 6px rgb(120 71 20 / 22%));
+}
+
+.pet-motion--video {
+  animation: none;
 }
 
 .pet-motion--idle {

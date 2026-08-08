@@ -8,6 +8,7 @@ import type {
   ReactElement,
   ReactNode,
 } from "react"
+import petActionVideo from "../../assets/pet-action.webm"
 import petGentleImage from "../../assets/pet-gentle.png"
 import petImage from "../../assets/pet.png"
 import petHappyImage from "../../assets/pet-happy.png"
@@ -153,7 +154,9 @@ export function App(): ReactElement {
   const messagesEnd = useRef<HTMLDivElement>(null)
   const operationLogsEnd = useRef<HTMLDivElement>(null)
   const petStateTimer = useRef<number | null>(null)
+  const petVideoRef = useRef<HTMLVideoElement>(null)
   const currentPetState = PET_STATE_CONFIG[petState]
+  const showIdleVideo = petState === "idle"
   const approvalList = Object.values(approvals)
   const taskIsActive = Boolean(taskId && !["completed", "failed", "cancelled"].includes(taskState))
   const canUndoContext = Boolean(
@@ -198,6 +201,16 @@ export function App(): ReactElement {
       image.src = imageSource
     }
   }, [])
+
+  useEffect(() => {
+    const video = petVideoRef.current
+    if (!video) return
+    if (showIdleVideo) {
+      void video.play().catch(() => undefined)
+      return
+    }
+    video.pause()
+  }, [showIdleVideo, petStateRevision])
 
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: "smooth" })
@@ -1315,20 +1328,33 @@ export function App(): ReactElement {
         >
           <span
             key={`${petState}-${petStateRevision}`}
-            className={`pet-visual pet-motion--${petState}`}
+            className={`pet-visual ${showIdleVideo ? "pet-motion--video" : `pet-motion--${petState}`}`}
             aria-hidden="true"
           >
             <span className="pet-face-slot">
-              {PET_IMAGE_ENTRIES.map(([imageKey, imageSource]) => (
-                <img
-                  key={imageKey}
-                  className={`pet-face pet-face--${imageKey} ${currentPetState.image === imageKey ? "pet-face--active" : ""}`}
-                  src={imageSource}
-                  alt=""
-                  draggable={false}
-                  decoding="async"
+              {showIdleVideo ? (
+                <video
+                  ref={petVideoRef}
+                  className="pet-face pet-face--active pet-face--video"
+                  src={petActionVideo}
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  preload="auto"
                 />
-              ))}
+              ) : (
+                PET_IMAGE_ENTRIES.map(([imageKey, imageSource]) => (
+                  <img
+                    key={imageKey}
+                    className={`pet-face pet-face--${imageKey} ${currentPetState.image === imageKey ? "pet-face--active" : ""}`}
+                    src={imageSource}
+                    alt=""
+                    draggable={false}
+                    decoding="async"
+                  />
+                ))
+              )}
             </span>
           </span>
           <span className="pet-state" aria-hidden="true">
