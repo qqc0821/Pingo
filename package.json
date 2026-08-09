@@ -16,13 +16,11 @@
     "format:check": "prettier --check 'src/**/*.{ts,tsx,css,html}' electron.vite.config.ts eslint.config.js '*.json'",
     "test": "tsx --test tests/*.test.ts",
     "test:directory": "tsx --test tests/inspect-directory.test.ts",
-    "test:ai-terminal-directory": "tsx scripts/ai-terminal-directory.ts",
-    "ai:lab": "tsx scripts/ai-lab.ts",
+    "test:ai-terminal": "tsx scripts/ai-terminal-directory.ts",
+    "agent": "tsx scripts/mini-agent.ts",
     "pack:mac": "npm run build && electron-builder --mac --arm64"
   },
   "dependencies": {
-    "@ai-sdk/openai-compatible": "^3.0.27",
-    "ai": "^7.0.58",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

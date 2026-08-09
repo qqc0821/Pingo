@@ -45,42 +45,30 @@ PINGO_INSPECT_EXPECT="notes/today.txt" \
 npm run test:directory
 ```
 
-需要验证真实 AI Terminal 完整链路时，使用下面的独立测试。它会让真实模型调用 `terminal_intent`，自动完成本测试专用的一次 capability/命令确认，并在 macOS Seatbelt 沙箱中执行受限的 `ls -1`；不会运行其他测试：
+需要验证真实 AI Terminal 完整链路时，使用下面的独立测试。测试会把你的原始问题原样交给真实模型，由 AI 自己决定是否调用 `terminal_intent`、调用哪种只读操作和使用哪个授权目录内的相对路径；测试只自动处理 R1 只读 Terminal 的 capability/命令确认，不会替你预设问题或命令。默认授权目录是当前工作目录：
 
 ```bash
-PINGO_INSPECT_DIRECTORY="$HOME/Documents" \
-PINGO_INSPECT_EXPECT="notes/today.txt" \
-npm run test:ai-terminal-directory
+npm run test:ai-terminal -- --prompt "查看当前项目的 src 目录有哪些文件"
 ```
 
-该测试只开放 `directory.list` 只读 intent；不会执行 Shell、写入、删除、安装或联网命令。测试用例详见：[ai-terminal-directory.ts](scripts/ai-terminal-directory.ts)。
-
-## AI Lab（无界面只读闭环）
-
-在接入正式对话前，可用独立的 AI Lab 对模型回答和工具调用做回归测试。无参数时运行 Legacy runtime 的虚拟场景；提供 `--project` 后使用真实项目的只读 runtime，模型只会看到 `list_files`、`search_files`、`read_file` 三个工具，所有读取仍经过 Pingo 的路径防护。
+如果问题本身不需要 Terminal，可以允许测试只验证最终回答：
 
 ```bash
-# 运行全部虚拟基准用例（需要 .env 中的 MODEL_API_KEY）
-npm run ai:lab
-
-# 运行真实项目只读场景，默认使用 Vercel AI SDK runtime
-npm run ai:lab -- --project . --runtime vercel
-
-# 自由提问（必须同时提供真实项目）
-npm run ai:lab -- --project . --runtime vercel --prompt "读取 package.json，说明这个项目的名称和测试命令"
-
-# 仅调试虚拟项目读取或写入拦截用例
-npm run ai:lab -- --scenario project-read
-npm run ai:lab -- --scenario blocked-write --json
-
-# 对比 Legacy/Vercel runtime 或另一兼容接口，不改动应用设置
-npm run ai:lab -- --project . --runtime legacy --scenario real-list,real-search,real-no-tool
-npm run ai:lab -- --project . --runtime vercel --model your-model --base-url https://example.com/v1
+npm run test:ai-terminal -- --allow-no-terminal --prompt "简单介绍一下当前项目"
 ```
 
-报告包含 `runtime`、`environment`、`fallbackUsed`、工具轨迹、最终回答、停止原因和逐项通过/失败结果；失败时命令以非零状态退出。虚拟与真实场景不能混用，`--prompt` 与 `--scenario` 互斥。
+测试用例详见：[ai-terminal-directory.ts](scripts/ai-terminal-directory.ts)。
 
-模型诊断只对 AI Lab 生效：默认关闭；`PINGO_DEBUG_MODEL=1` 写入脱敏的协议摘要，`PINGO_DEBUG_MODEL=raw` 才写入有大小上限的脱敏 request/response body。日志位于 `~/Library/Logs/Pingo/`，可能包含提示词和项目片段，请仅在本地调试时开启。
+## Mini Agent（命令行闭环）
+
+`scripts/mini-agent.ts` 是一个不依赖应用其它模块的独立 agent，用来在没有界面的情况下验证「模型能否自主调用工具并基于真实文件回答」。它提供 `list_files`、`read_file`、`run_command` 三个工具，需要 `.env` 中的 `MODEL_API_KEY`。
+
+```bash
+npm run agent -- "package.json 里的 dev 命令是什么"
+npm run agent -- --debug "这个项目当前 git 分支是什么"
+```
+
+它不做任何权限拦截：命令直接执行、路径不限制在项目目录内、隐藏文件同样可见。只保留了防止撑爆上下文的限制（单文件读取 20K 字符、目录最多列 200 项、命令 60 秒超时、最多 6 轮工具循环）。因为 `.env` 对它可见，模型读取它会把 `MODEL_API_KEY` 一起发给模型服务，介意的话把 `.env` 加进脚本里的 `NOISY_DIRECTORIES`。
 
 安装包输出到 `dist/`，当前目标为 macOS arm64。未签名应用首次启动时需要在 macOS 中允许打开；公开分发前需配置 Developer ID 签名和公证。
 

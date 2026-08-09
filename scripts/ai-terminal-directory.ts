@@ -16,27 +16,21 @@ async function main(): Promise<void> {
   loadDotEnv([process.cwd()])
   assert.ok(process.env.MODEL_API_KEY?.trim(), "未找到 MODEL_API_KEY，请先配置 .env")
 
-  const requestedDirectory = process.env.PINGO_INSPECT_DIRECTORY?.trim()
-  assert.ok(
-    requestedDirectory,
-    "请设置 PINGO_INSPECT_DIRECTORY，例如：PINGO_INSPECT_DIRECTORY=\"$HOME/Documents\"",
-  )
+  const options = parseArgs(process.argv.slice(2))
+  if (options.help) {
+    console.log(
+      '用法：npm run test:ai-terminal -- --prompt "你的问题" [--allow-no-terminal]\n' +
+        "默认将当前工作目录作为已授权目录；AI 根据你的原始问题决定是否以及如何调用 Terminal。",
+    )
+    return
+  }
+
+  const requestedDirectory = process.env.PINGO_INSPECT_DIRECTORY?.trim() || process.cwd()
   const projectRoot = getRealProjectRoot(requestedDirectory)
   assert.ok(
     !isSensitiveRelativePath(basename(projectRoot)),
     "不能把 .git、.ssh、.gnupg、credentials 或 secrets 目录作为授权目录",
   )
-
-  const expectedEntry = process.env.PINGO_INSPECT_EXPECT?.trim()
-  const prompt = [
-    "这是一次 Pingo Terminal 端到端测试。",
-    "你必须调用 terminal_intent 工具，不能调用 list_files、search_files 或 read_file。",
-    'TerminalIntent 必须严格使用：{"kind":"directory.list","action":"list","cwd":"."}。',
-    "执行成功后，用简短中文总结命令输出；不要执行其它命令，不要写入或修改任何文件。",
-    expectedEntry ? `总结中请确认是否看到了目录条目：${expectedEntry}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n")
 
   const runtimeData = mkdtempSync(join(tmpdir(), "pingo-ai-terminal-directory-"))
   const settingsStore = new SettingsStore(join(runtimeData, "settings"))
@@ -46,6 +40,7 @@ async function main(): Promise<void> {
   const events: ChatStreamEvent[] = []
   let taskId = ""
   let settled = false
+  let finalAnswer = ""
   let resolveDone!: () => void
   let rejectDone!: (error: Error) => void
   const done = new Promise<void>((resolve, reject) => {
@@ -64,7 +59,11 @@ async function main(): Promise<void> {
 
   async function handleEvent(event: ChatStreamEvent): Promise<void> {
     if (event.type === "capability-request") {
-      assert.deepEqual(event.capabilities, ["terminal.execute"])
+      assert.deepEqual(
+        event.capabilities,
+        ["terminal.execute"],
+        "该测试只自动处理 Terminal capability，不自动授权文件写入等其它能力",
+      )
       manager.grantCapability(
         SOURCE_WINDOW_ID,
         taskId,
@@ -76,7 +75,21 @@ async function main(): Promise<void> {
     }
     if (event.type === "approval-request") {
       assert.equal(event.request.taskId, taskId)
-      assert.equal(event.request.plan.terminalPlan?.intent.kind, "directory.list")
+      const terminalPlan = event.request.plan.terminalPlan
+      assert.ok(terminalPlan, "审批请求不是 Terminal 计划")
+      if (
+        terminalPlan.risk !== "R1" ||
+        terminalPlan.effects.workspace !== "read" ||
+        terminalPlan.effects.projectCodeExecution ||
+        terminalPlan.sandbox.network !== "deny"
+      ) {
+        await manager.decide(SOURCE_WINDOW_ID, {
+          taskId,
+          operationId: event.request.operationId,
+          decision: "deny",
+        })
+        throw new Error("测试只自动批准 R1 只读 Terminal 命令")
+      }
       await manager.decide(SOURCE_WINDOW_ID, {
         taskId,
         operationId: event.request.operationId,
@@ -84,6 +97,7 @@ async function main(): Promise<void> {
       })
       return
     }
+    if (event.type === "chunk") finalAnswer += event.content
     if (event.type === "task-state" && event.state === "failed") {
       throw new Error("Pingo 任务失败，请查看上方事件和模型配置")
     }
@@ -96,7 +110,7 @@ async function main(): Promise<void> {
   try {
     taskId = manager.submit(
       SOURCE_WINDOW_ID,
-      [{ role: "user", content: prompt }],
+      [{ role: "user", content: options.prompt }],
       emit,
     )
     let timeoutId: ReturnType<typeof setTimeout> | undefined
@@ -116,27 +130,58 @@ async function main(): Promise<void> {
       (event): event is Extract<ChatStreamEvent, { type: "tool" }> =>
         event.type === "tool" && event.name === "terminal_intent",
     )
-    assert.ok(terminalCalls.length > 0, "AI 没有调用 terminal_intent")
+    if (options.requireTerminal) assert.ok(terminalCalls.length > 0, "AI 没有调用 terminal_intent")
     const operation = events.find(
       (event): event is Extract<ChatStreamEvent, { type: "operation-result" }> =>
         event.type === "operation-result",
     )
-    assert.ok(operation, "没有收到 operation-result")
-    assert.equal(operation.result.status, "completed", operation.result.content)
-    if (expectedEntry) assert.match(operation.result.content, new RegExp(escapeRegExp(expectedEntry)))
+    if (options.requireTerminal) assert.ok(operation, "没有收到 operation-result")
+    if (operation) assert.equal(operation.result.status, "completed", operation.result.content)
 
-    console.log("[PASS] AI → terminal_intent → capability → approval → Seatbelt → result")
+    console.log(
+      `[PASS] AI → ${terminalCalls.length ? "terminal_intent → capability → approval → Seatbelt → result" : "final answer"}`,
+    )
     console.log(`directory: ${projectRoot}`)
     console.log(`terminal calls: ${terminalCalls.length}`)
-    console.log(operation.result.content)
+    if (operation) console.log(`command result:\n${operation.result.content}`)
+    console.log(`AI answer:\n${finalAnswer.trim() || "(empty)"}`)
   } finally {
     if (!settled && taskId) manager.cancel(taskId, SOURCE_WINDOW_ID)
     rmSync(runtimeData, { recursive: true, force: true })
   }
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+interface CliOptions {
+  prompt: string
+  requireTerminal: boolean
+  help: boolean
+}
+
+function parseArgs(argv: string[]): CliOptions {
+  let prompt = ""
+  let requireTerminal = true
+  let help = false
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]
+    if (argument === "--help" || argument === "-h") {
+      help = true
+      continue
+    }
+    if (argument === "--allow-no-terminal") {
+      requireTerminal = false
+      continue
+    }
+    if (argument === "--prompt") {
+      const value = argv[index + 1]?.trim()
+      if (!value) throw new Error("--prompt 后必须提供用户问题")
+      prompt = value
+      index += 1
+      continue
+    }
+    throw new Error(`未知参数：${argument}`)
+  }
+  if (!help && !prompt) throw new Error('请提供原始用户问题：--prompt "你的问题"')
+  return { prompt, requireTerminal, help }
 }
 
 void main().catch((error: unknown) => {
