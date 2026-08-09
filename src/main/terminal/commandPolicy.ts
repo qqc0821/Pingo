@@ -155,6 +155,13 @@ export function parseTerminalIntent(value: unknown): TerminalIntent {
       cwd: parseRelativeCwd(candidate.cwd),
     }
   }
+  if (candidate.kind === "directory.list") {
+    assertExactKeys(candidate, ["kind", "action", "cwd"])
+    if (candidate.action !== "list") {
+      throw new Error("directory.list 只开放 list")
+    }
+    return { kind: "directory.list", action: "list", cwd: parseRelativeCwd(candidate.cwd) }
+  }
   throw new Error("不支持的 TerminalIntent")
 }
 

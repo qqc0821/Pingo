@@ -5,12 +5,38 @@ export const MAX_FILE_BYTES = 200_000
 export const MAX_READ_CHARS = 24_000
 export const MAX_SEARCH_RESULTS = 50
 export const MAX_LIST_RESULTS = 200
+export const MAX_SCAN_ENTRIES = 10_000
 export const MAX_WRITE_BYTES = 200_000
 export const MAX_BATCH_ITEMS = 32
+export const DEFAULT_SCAN_EXCLUDED_DIRECTORIES = new Set([
+  "node_modules",
+  "out",
+  "dist",
+  "coverage",
+  ".vite",
+])
 
 const SENSITIVE_DIRECTORY_NAMES = new Set([".git", ".ssh", ".gnupg", "credentials", "secrets"])
 const SENSITIVE_FILE_NAMES = new Set(["id_rsa", "id_ed25519", "authorized_keys"])
 const SENSITIVE_EXTENSIONS = new Set([".pem", ".key", ".p12", ".pfx"])
+
+export interface ScanBudget {
+  visitedEntries: number
+  truncated: boolean
+}
+
+export function createScanBudget(): ScanBudget {
+  return { visitedEntries: 0, truncated: false }
+}
+
+export function consumeScanEntry(budget: ScanBudget): boolean {
+  if (budget.visitedEntries >= MAX_SCAN_ENTRIES) {
+    budget.truncated = true
+    return false
+  }
+  budget.visitedEntries += 1
+  return true
+}
 
 export function getRealProjectRoot(projectPath: string): string {
   const root = realpathSync.native(projectPath)

@@ -12,7 +12,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "list_files",
-      description: "列出用户已经授权的项目目录中的文本文件路径。不要猜测绝对路径。",
+      description: "列出用户已经授权的项目目录中的项目文件路径。不要猜测绝对路径。",
       parameters: {
         type: "object",
         properties: {
@@ -151,6 +151,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
 ]
 
 export const READ_ONLY_TOOL_NAMES = new Set(["list_files", "search_files", "read_file"])
+export const READ_ONLY_TOOL_DEFINITIONS = TOOL_DEFINITIONS.filter((definition) =>
+  READ_ONLY_TOOL_NAMES.has(definition.function.name),
+)
 
 export async function executeTool(
   projectPath: string | undefined,

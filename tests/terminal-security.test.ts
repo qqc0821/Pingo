@@ -182,6 +182,32 @@ test("new read-only intent packs compile with read-only sandbox and reject path/
   assert.match(result.content, /^v\d+/)
 })
 
+test("directory.list executes an allowlisted read-only command in the authorized folder", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pingo-directory-list-"))
+  try {
+    writeFileSync(join(root, "visible-marker.txt"), "marker\n")
+    const plan = compileTerminalIntent(
+      { kind: "directory.list", action: "list", cwd: "." },
+      {
+        taskId: "task-directory-list",
+        operationId: "operation-directory-list",
+        sourceWindowId: "window",
+        projectRoot: root,
+      },
+    )
+    assert.equal(plan.executable.displayName, "ls")
+    assert.deepEqual(plan.argv, ["-1"])
+    assert.equal(plan.effects.workspace, "read")
+    assert.equal(plan.sandbox.network, "deny")
+
+    const result = await new TerminalRunner().run(plan)
+    assert.equal(result.exitCode, 0, result.content)
+    assert.match(result.content, /visible-marker\.txt/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("session trust is limited to read-only R1, decays, caps at 20 uses, and is revocable", () => {
   const root = process.cwd()
   const readPlan = compileTerminalIntent(

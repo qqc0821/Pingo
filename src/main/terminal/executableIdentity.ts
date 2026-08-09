@@ -5,6 +5,7 @@ import type { ExecutableIdentity, TerminalExecutableName } from "../../shared/ty
 
 const FIXED_EXECUTABLES: Record<TerminalExecutableName, string[]> = {
   git: ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"],
+  ls: ["/bin/ls", "/usr/bin/ls"],
   npm: [],
   node: [],
   pnpm: [],

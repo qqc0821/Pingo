@@ -156,6 +156,19 @@ export const INTENT_PACK_DEFINITIONS: readonly IntentPackDefinition[] = [
     preservesColor: false,
     enabled: true,
   },
+  {
+    kind: "directory.list",
+    version: 1,
+    executable: "ls",
+    actions: {
+      list: SAFE_ACTION("-1"),
+    },
+    sandboxTier: "read-only",
+    effects: READ_EFFECTS,
+    risk: "R1",
+    preservesColor: false,
+    enabled: true,
+  },
 ] as const
 
 const PACK_FLAGS: Record<string, string> = {
@@ -164,6 +177,7 @@ const PACK_FLAGS: Record<string, string> = {
   "git.inspect": "PINGO_INTENT_PACK_GIT_INSPECT_ENABLED",
   "runtime.info": "PINGO_INTENT_PACK_RUNTIME_INFO_ENABLED",
   "pkg.audit": "PINGO_INTENT_PACK_PKG_AUDIT_ENABLED",
+  "directory.list": "PINGO_INTENT_PACK_DIRECTORY_LIST_ENABLED",
 }
 
 for (const definition of INTENT_PACK_DEFINITIONS) validateIntentPackDefinition(definition)
@@ -259,7 +273,7 @@ export function intentKind(value: unknown): value is TerminalIntent["kind"] {
 }
 
 function isAllowedExecutableName(value: string): value is TerminalExecutableName {
-  return ["git", "npm", "node", "pnpm", "yarn", "bun"].includes(value)
+  return ["git", "ls", "npm", "node", "pnpm", "yarn", "bun"].includes(value)
 }
 
 function isAllowedSandboxTier(value: string): value is TerminalSandboxTier {

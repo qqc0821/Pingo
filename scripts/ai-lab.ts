@@ -1,36 +1,70 @@
 import { loadDotEnv } from "../src/main/env.js"
 import { ModelClient } from "../src/main/ai/client.js"
-import { AI_LAB_SCENARIOS, getAiLabScenario } from "../src/main/ai-lab/scenarios.js"
+import {
+  createPingoModel,
+  getModelBaseUrlHost,
+  normalizeLegacyModelEndpoint,
+} from "../src/main/ai/provider.js"
+import { ModelDiagnostics } from "../src/main/ai/modelDiagnostics.js"
+import { LegacyAgentRuntime } from "../src/main/agent/legacyRuntime.js"
+import { VercelAgentRuntime } from "../src/main/agent/vercelRuntime.js"
 import { runAiLabScenario } from "../src/main/ai-lab/runner.js"
-
-interface CliOptions {
-  scenarioIds: string[]
-  json: boolean
-  model?: string
-  baseUrl?: string
-}
+import {
+  helpText,
+  parseAiLabArgs,
+  resolveAiLabScenarios,
+  validateProjectPath,
+} from "../src/main/ai-lab/cli.js"
 
 async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2))
+  const options = parseAiLabArgs(process.argv.slice(2))
+  if (options.help) {
+    console.log(helpText())
+    return
+  }
+
   loadDotEnv([process.cwd()])
+  const projectPath = validateProjectPath(options.projectPath)
   if (options.model) process.env.MODEL_NAME = options.model
-  if (options.baseUrl) process.env.MODEL_BASE_URL = options.baseUrl
+  if (options.baseUrl) {
+    process.env.MODEL_BASE_URL =
+      options.runtime === "legacy" ? normalizeLegacyModelEndpoint(options.baseUrl) : options.baseUrl
+  }
 
   if (!process.env.MODEL_API_KEY?.trim()) {
     throw new Error("未找到 MODEL_API_KEY。请先在 .env 中配置密钥后再运行 AI Lab。")
   }
 
-  const scenarios = options.scenarioIds.map((id) => {
-    const scenario = getAiLabScenario(id)
-    if (!scenario)
-      throw new Error(
-        `未知用例：${id}。可用用例：${AI_LAB_SCENARIOS.map((item) => item.id).join("、")}`,
-      )
-    return scenario
+  const scenarios = resolveAiLabScenarios(options)
+  const diagnostics = new ModelDiagnostics({
+    level: process.env.PINGO_DEBUG_MODEL,
+    apiKey: process.env.MODEL_API_KEY,
   })
+  const provider =
+    options.runtime === "vercel"
+      ? new VercelAgentRuntime(
+          createPingoModel({
+            apiKey: process.env.MODEL_API_KEY,
+            modelName: process.env.MODEL_NAME,
+            baseUrl: process.env.MODEL_BASE_URL,
+            diagnostics,
+          }),
+        )
+      : new LegacyAgentRuntime(new ModelClient())
+  const modelName = process.env.MODEL_NAME?.trim() || "deepseek-chat"
+  const baseUrlHost = getModelBaseUrlHost(process.env.MODEL_BASE_URL)
   const reports = []
   for (const scenario of scenarios) {
-    const report = await runAiLabScenario({ scenario, client: new ModelClient() })
+    const report = await runAiLabScenario({
+      scenario,
+      runtime: provider,
+      projectPath,
+      diagnostics,
+      model: modelName,
+      baseUrlHost,
+      attempt: 1,
+      retried: false,
+    })
     reports.push(report)
     if (!options.json) printReport(report)
   }
@@ -39,49 +73,12 @@ async function main(): Promise<void> {
   if (reports.some((report) => !report.passed)) process.exitCode = 1
 }
 
-function parseArgs(args: string[]): CliOptions {
-  const options: CliOptions = {
-    scenarioIds: AI_LAB_SCENARIOS.map((scenario) => scenario.id),
-    json: false,
-  }
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]
-    if (arg === "--help" || arg === "-h") {
-      printHelp()
-      process.exit(0)
-    }
-    if (arg === "--json") {
-      options.json = true
-      continue
-    }
-    if (arg === "--scenario") {
-      const value = args[index + 1]
-      if (!value) throw new Error("--scenario 需要一个用例 ID")
-      options.scenarioIds = value.split(",").filter(Boolean)
-      index += 1
-      continue
-    }
-    if (arg === "--model") {
-      options.model = requiredValue(arg, args[++index])
-      continue
-    }
-    if (arg === "--base-url") {
-      options.baseUrl = requiredValue(arg, args[++index])
-      continue
-    }
-    throw new Error(`未知参数：${arg}`)
-  }
-  return options
-}
-
-function requiredValue(flag: string, value: string | undefined): string {
-  if (!value) throw new Error(`${flag} 需要一个值`)
-  return value
-}
-
 function printReport(report: Awaited<ReturnType<typeof runAiLabScenario>>): void {
   console.log(
     `\n[${report.passed ? "PASS" : "FAIL"}] ${report.scenario.id} — ${report.scenario.title}`,
+  )
+  console.log(
+    `  runtime: ${report.runtime} | environment: ${report.environment} | fallbackUsed: ${report.fallbackUsed} | finishReason: ${report.finishReason}`,
   )
   for (const trace of report.toolTraces) {
     console.log(`  tool: ${trace.name} ${JSON.stringify(trace.args)} (${trace.detail})`)
@@ -90,23 +87,6 @@ function printReport(report: Awaited<ReturnType<typeof runAiLabScenario>>): void
   for (const check of report.checks) {
     console.log(`  ${check.passed ? "✓" : "✗"} ${check.name}: ${check.detail}`)
   }
-}
-
-function printHelp(): void {
-  console.log(`AI Lab — 隔离测试模型回答与工具调用
-
-Usage:
-  npm run ai:lab
-  npm run ai:lab -- --scenario project-read
-  npm run ai:lab -- --scenario project-read,blocked-write --model deepseek-chat
-  npm run ai:lab -- --json
-
-Options:
-  --scenario <ids>  运行一个或多个逗号分隔的用例
-  --model <name>    仅覆盖本次运行的 MODEL_NAME
-  --base-url <url>  仅覆盖本次运行的 MODEL_BASE_URL
-  --json            输出完整的机器可读报告
-`)
 }
 
 void main().catch((error: unknown) => {

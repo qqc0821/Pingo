@@ -1,6 +1,9 @@
 import { readdirSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
 import {
+  consumeScanEntry,
+  createScanBudget,
+  DEFAULT_SCAN_EXCLUDED_DIRECTORIES,
   getRealProjectRoot,
   isSensitiveRelativePath,
   MAX_LIST_RESULTS,
@@ -18,24 +21,42 @@ export function listFiles(projectPath: string, args: unknown): string {
   if (!statSync(startPath).isDirectory()) throw new Error("list_files 的 directory 必须是目录")
 
   const results: string[] = []
-  walk(startPath, root, results)
-  if (results.length === 0) return "授权目录中没有找到可列出的文件。"
+  const budget = createScanBudget()
+  walk(startPath, root, results, budget)
+  if (results.length === 0) {
+    return budget.truncated
+      ? "授权目录中没有找到可列出的文件；扫描已达到安全条目预算，结果可能不完整。"
+      : "授权目录中没有找到可列出的文件。"
+  }
   const suffix =
-    results.length >= MAX_LIST_RESULTS ? `\n（结果已限制为 ${MAX_LIST_RESULTS} 项）` : ""
+    results.length >= MAX_LIST_RESULTS
+      ? `\n（结果已限制为 ${MAX_LIST_RESULTS} 项）`
+      : budget.truncated
+        ? "\n（扫描已达到安全条目预算，结果可能不完整）"
+        : ""
   return `${results.join("\n")}${suffix}`
 }
 
-function walk(directory: string, root: string, results: string[]): void {
+function walk(
+  directory: string,
+  root: string,
+  results: string[],
+  budget: ReturnType<typeof createScanBudget>,
+): void {
   if (results.length >= MAX_LIST_RESULTS) return
 
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (results.length >= MAX_LIST_RESULTS) return
+    if (!consumeScanEntry(budget)) return
     const absolutePath = join(directory, entry.name)
     const relativePath = relative(root, absolutePath)
     if (isSensitiveRelativePath(relativePath) || entry.isSymbolicLink()) continue
+    if (entry.isFile() && entry.name === ".DS_Store") continue
 
-    if (entry.isDirectory()) walk(absolutePath, root, results)
-    else if (entry.isFile()) results.push(relativePath)
+    if (entry.isDirectory()) {
+      if (DEFAULT_SCAN_EXCLUDED_DIRECTORIES.has(entry.name)) continue
+      walk(absolutePath, root, results, budget)
+    } else if (entry.isFile()) results.push(relativePath)
   }
 }
 

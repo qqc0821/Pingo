@@ -1,65 +1,98 @@
-import { AgentOrchestrator } from "../agent/orchestrator.js"
-import { TOOL_DEFINITIONS } from "../tools/registry.js"
+import { basename } from "node:path"
+import { LegacyAgentRuntime } from "../agent/legacyRuntime.js"
+import type { AgentRuntime } from "../agent/runtime.js"
+import { getRealProjectRoot } from "../security/pathGuard.js"
+import {
+  READ_ONLY_TOOL_DEFINITIONS,
+  READ_ONLY_TOOL_NAMES,
+  TOOL_DEFINITIONS,
+} from "../tools/registry.js"
+import { ModelClient } from "../ai/client.js"
+import { createRealToolExecutor } from "./realTools.js"
 import { executeAiLabTool, isAiLabReadOnlyTool } from "./virtualTools.js"
 import type { AiLabCheck, AiLabReport, AiLabRunOptions } from "./types.js"
 
-const FINAL_ANSWER_MIN_LENGTH = 4
-
-/**
- * 在与正式 Agent 相同的提示词/工具协议下运行，但使用虚拟工具执行器。
- * 本模块不会加载 TaskManager，因此不会进入正式 IPC、权限或持久化路径。
- */
 export async function runAiLabScenario(options: AiLabRunOptions): Promise<AiLabReport> {
   const events: AiLabReport["events"] = []
   const toolTraces: AiLabReport["toolTraces"] = []
-  const answerParts: string[] = []
-  const orchestrator = new AgentOrchestrator({
-    taskId: `ai-lab-${options.scenario.id}`,
-    client: options.client,
-    toolDefinitions: TOOL_DEFINITIONS,
-    executeTool: async (name, args) => executeAiLabTool(name, args, toolTraces),
-    isReadOnlyTool: isAiLabReadOnlyTool,
-    emit: (event) => {
-      events.push(event)
-      if (event.type === "chunk") answerParts.push(event.content)
-    },
-    isCancelled: () => false,
+  const isReal = options.scenario.environment === "real-readonly"
+  const projectPath = isReal ? getRealProjectRoot(options.projectPath ?? "") : undefined
+  const runtime = options.runtime ?? new LegacyAgentRuntime(options.client ?? new ModelClient())
+  const toolDefinitions = isReal ? READ_ONLY_TOOL_DEFINITIONS : TOOL_DEFINITIONS
+  const executor = isReal
+    ? createRealToolExecutor(projectPath ?? "", toolTraces).execute
+    : (name: string, args: unknown) => executeAiLabTool(name, args, toolTraces)
+  const isReadOnlyTool = isReal
+    ? (name: string) => READ_ONLY_TOOL_NAMES.has(name)
+    : isAiLabReadOnlyTool
+  const projectName = isReal ? basename(projectPath ?? "") : "AI Lab Fixture"
+  const runtimeResult = await runtime.run({
+    messages: [{ role: "user", content: options.scenario.prompt }],
+    toolDefinitions,
+    executeTool: executor,
+    isReadOnlyTool,
     projectAuthorized: options.scenario.projectAuthorized,
-    projectName: "AI Lab Fixture",
+    projectName,
+    maxSteps: 6,
+    diagnostics: options.diagnostics,
+    emit: (event) => events.push(event),
   })
-
-  await orchestrator.run([{ role: "user", content: options.scenario.prompt }])
-  const finalAnswer = answerParts.join("").trim()
-  const checks = evaluate(options.scenario, finalAnswer, toolTraces)
+  const checks = evaluate(options.scenario, runtimeResult, toolTraces)
   return {
     scenario: options.scenario,
-    finalAnswer,
+    finalAnswer: runtimeResult.finalAnswer,
     events,
     toolTraces,
     checks,
     passed: checks.every((check) => check.passed),
-    safeMode: true,
+    environment: options.scenario.environment,
+    runtime: runtimeResult.runtime,
+    fallbackUsed: runtimeResult.fallbackUsed,
+    steps: runtimeResult.steps,
+    finishReason: runtimeResult.finishReason,
+    startedAt: options.startedAt ?? new Date().toISOString(),
+    model: options.model ?? "unknown",
+    baseUrlHost: options.baseUrlHost ?? "unknown",
+    attempt: options.attempt ?? 1,
+    retried: options.retried ?? false,
+    ...(options.retryReason ? { retryReason: options.retryReason } : {}),
+    safeMode: !isReal,
   }
 }
 
 function evaluate(
   scenario: AiLabReport["scenario"],
-  finalAnswer: string,
+  result: Awaited<ReturnType<AgentRuntime["run"]>>,
   toolTraces: AiLabReport["toolTraces"],
 ): AiLabCheck[] {
   const checks: AiLabCheck[] = [
     {
       name: "最终回答",
-      passed: finalAnswer.length >= FINAL_ANSWER_MIN_LENGTH,
-      detail:
-        finalAnswer.length >= FINAL_ANSWER_MIN_LENGTH
-          ? `已收到 ${finalAnswer.length} 个字符的最终回答。`
-          : "模型没有产出可用的最终回答。",
+      passed: result.finalAnswer.trim().length > 0,
+      detail: result.finalAnswer.trim()
+        ? `已收到 ${result.finalAnswer.trim().length} 个字符的最终回答。`
+        : "模型没有产出可用的最终回答。",
     },
     {
-      name: "安全隔离",
-      passed: true,
-      detail: "所有工具都运行在虚拟项目中；高风险调用只会被记录和拦截。",
+      name: "运行环境",
+      passed: scenario.environment === "real-readonly" || scenario.environment === "virtual",
+      detail:
+        scenario.environment === "real-readonly"
+          ? "工具只通过真实项目的只读 gateway 执行。"
+          : "工具运行在虚拟项目中；高风险调用只会被记录和拦截。",
+    },
+    {
+      name: "runtime 结果",
+      passed:
+        !result.error && result.finishReason !== "error" && result.finishReason !== "cancelled",
+      detail: result.error ?? `runtime=${result.runtime}，finishReason=${result.finishReason}`,
+    },
+    {
+      name: "runtime fallback",
+      passed: result.fallbackUsed === false,
+      detail: result.fallbackUsed
+        ? "本次结果使用了 runtime fallback。"
+        : "未发生 runtime fallback。",
     },
   ]
 
@@ -80,12 +113,42 @@ function evaluate(
     })
   }
 
+  if (scenario.requiredToolSequence) {
+    const actual = toolTraces.map((trace) => trace.name)
+    let cursor = -1
+    const position = scenario.requiredToolSequence.every((name) => {
+      const next = actual.indexOf(name, cursor + 1)
+      if (next < 0) return false
+      cursor = next
+      return true
+    })
+    checks.push({
+      name: "工具调用顺序",
+      passed: position,
+      detail: position
+        ? `调用顺序满足 ${scenario.requiredToolSequence.join(" → ")}。`
+        : `实际调用顺序为 ${actual.join(" → ") || "（无）"}。`,
+    })
+  }
+
   for (const fragment of scenario.expectedAnswerFragments ?? []) {
-    const present = finalAnswer.toLowerCase().includes(fragment.toLowerCase())
+    const present = result.finalAnswer.toLowerCase().includes(fragment.toLowerCase())
     checks.push({
       name: `回答包含「${fragment}」`,
       passed: present,
       detail: present ? "已包含预期事实。" : "未包含预期事实，可能没有正确利用工具结果。",
+    })
+  }
+
+  if (scenario.expectedAnswerExact !== undefined) {
+    const actual = result.finalAnswer.trim()
+    checks.push({
+      name: `回答精确等于「${scenario.expectedAnswerExact}」`,
+      passed: actual === scenario.expectedAnswerExact,
+      detail:
+        actual === scenario.expectedAnswerExact
+          ? "已通过规范化后的精确答案检查。"
+          : `规范化后的回答为「${actual || "（空）"}」。`,
     })
   }
 

@@ -106,8 +106,13 @@ export type TerminalIntent =
       packageManager: "auto"
       cwd: string
     }
+  | {
+      kind: "directory.list"
+      action: "list"
+      cwd: string
+    }
 
-export type TerminalExecutableName = "git" | "npm" | "node" | "pnpm" | "yarn" | "bun"
+export type TerminalExecutableName = "git" | "ls" | "npm" | "node" | "pnpm" | "yarn" | "bun"
 
 export type TerminalSandboxTier = "read-only" | "workspace-write" | "network-allowlist"
 

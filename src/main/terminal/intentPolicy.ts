@@ -229,6 +229,8 @@ function compileIntent(
       return compileRuntimeInfo(projectRoot, intent, base)
     case "pkg.audit":
       return compilePackageAudit(projectRoot, intent, base)
+    case "directory.list":
+      return compileDirectoryList(projectRoot, intent, base)
   }
 }
 
@@ -364,6 +366,35 @@ function compilePackageAudit(
     sandbox,
     risk: "R1",
     reason: "只读本地依赖审计；网络关闭、workspace 只读、目录外访问禁止",
+  }
+}
+
+function compileDirectoryList(
+  projectRoot: string,
+  _intent: Extract<TerminalIntent, { kind: "directory.list" }>,
+  base: Omit<
+    ResolvedCommandPlan,
+    | "executable"
+    | "argv"
+    | "projectScript"
+    | "effects"
+    | "sandbox"
+    | "risk"
+    | "reason"
+    | "planDigest"
+  >,
+): Omit<ResolvedCommandPlan, "planDigest"> {
+  const executable = resolveExecutableIdentity("ls")
+  const effects = readOnlyEffects()
+  const sandbox = createSandboxSpec(projectRoot, base.operationId, executable, effects, "read-only")
+  return {
+    ...base,
+    executable,
+    argv: ["-1"],
+    effects,
+    sandbox,
+    risk: "R1",
+    reason: "只读目录列表；workspace 只读、网络关闭、目录外访问禁止",
   }
 }
 
