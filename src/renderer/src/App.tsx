@@ -1,5 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react"
-import type { CSSProperties, FormEvent, KeyboardEvent, PointerEvent, ReactElement } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import type {
+  CSSProperties,
+  FormEvent,
+  KeyboardEvent,
+  PointerEvent,
+  ReactElement,
+  UIEvent,
+} from "react"
 import petGentleImage from "../../assets/pet-gentle.png"
 import petImage from "../../assets/pet.png"
 import petHappyImage from "../../assets/pet-happy.png"
@@ -20,6 +27,13 @@ interface PetPrompt {
   detail: string
 }
 
+const BLOCKED_TASK_PROMPT: PetPrompt = {
+  tone: "warning",
+  label: "需要注意",
+  title: "任务暂时无法继续",
+  detail: "请调整任务后再试。",
+}
+
 function promptForTaskState(state: TaskState): PetPrompt {
   switch (state) {
     case "proposed":
@@ -37,19 +51,8 @@ function promptForTaskState(state: TaskState): PetPrompt {
         detail: "正在拆解目标并规划下一步。",
       }
     case "awaiting_permission":
-      return {
-        tone: "warning",
-        label: "需要授权",
-        title: "等待你的授权",
-        detail: "请检查权限范围。授权后，Pingo 会继续执行。",
-      }
     case "awaiting_confirmation":
-      return {
-        tone: "warning",
-        label: "需要确认",
-        title: "等待你的确认",
-        detail: "请检查操作内容与可能影响，确认后继续。",
-      }
+      return BLOCKED_TASK_PROMPT
     case "executing":
       return {
         tone: "progress",
@@ -98,9 +101,9 @@ const PROMPT_PREVIEWS: Record<string, PetPrompt> = {
   },
   warning: {
     tone: "warning",
-    label: "需要确认",
-    title: "是否允许修改项目文件？",
-    detail: "将更新 2 个界面文件。确认范围后，Pingo 会继续执行。",
+    label: "需要注意",
+    title: "项目状态需要检查",
+    detail: "请检查任务描述或项目状态后再试。",
   },
   error: {
     tone: "error",
@@ -175,10 +178,44 @@ function PromptCard({
   onToggle: () => void
 }): ReactElement {
   const liveMode = prompt.tone === "error" ? "assertive" : "polite"
+  const detailRef = useRef<HTMLParagraphElement>(null)
+  const [detailHasOverflow, setDetailHasOverflow] = useState(false)
+  const [detailAtEnd, setDetailAtEnd] = useState(true)
+
+  useLayoutEffect(() => {
+    if (!expanded) {
+      setDetailHasOverflow(false)
+      setDetailAtEnd(true)
+      return
+    }
+
+    const detailElement = detailRef.current
+    if (!detailElement) return
+    const measure = () => {
+      const hasOverflow = detailElement.scrollHeight > detailElement.clientHeight + 1
+      setDetailHasOverflow(hasOverflow)
+      setDetailAtEnd(
+        !hasOverflow ||
+          detailElement.scrollTop + detailElement.clientHeight >= detailElement.scrollHeight - 1,
+      )
+    }
+    const observer = new ResizeObserver(measure)
+
+    measure()
+    observer.observe(detailElement)
+    return () => observer.disconnect()
+  }, [expanded, prompt.detail])
+
+  const handleDetailScroll = useCallback((event: UIEvent<HTMLParagraphElement>) => {
+    const detailElement = event.currentTarget
+    setDetailAtEnd(
+      detailElement.scrollTop + detailElement.clientHeight >= detailElement.scrollHeight - 1,
+    )
+  }, [])
 
   return (
     <section
-      className={`pet-prompt pet-prompt--${prompt.tone} ${expanded ? "pet-prompt--expanded" : ""}`}
+      className={`pet-prompt pet-prompt--${prompt.tone} ${expanded ? "pet-prompt--expanded" : ""} ${detailHasOverflow && !detailAtEnd ? "pet-prompt--detail-overflow" : ""}`}
       role={prompt.tone === "error" ? "alert" : "status"}
       aria-live={liveMode}
       aria-atomic="true"
@@ -207,7 +244,13 @@ function PromptCard({
           </svg>
         </button>
       </div>
-      <p id={PROMPT_DETAIL_ID} className="pet-prompt-detail" aria-hidden={!expanded}>
+      <p
+        ref={detailRef}
+        id={PROMPT_DETAIL_ID}
+        className="pet-prompt-detail"
+        aria-hidden={!expanded}
+        onScroll={handleDetailScroll}
+      >
         {prompt.detail}
       </p>
       {prompt.tone === "progress" ? (
@@ -339,11 +382,9 @@ export function App(): ReactElement {
   const openDialog = useCallback(() => {
     setExpanded(true)
     setShowInput(true)
-    if (!isSending) {
-      showPrompt(null)
-    }
+    setPromptExpanded(false)
     void window.pingo?.pet.setExpanded(true)
-  }, [isSending, showPrompt])
+  }, [])
 
   const handleTaskEvent = useCallback(
     (event: ChatStreamEvent) => {
@@ -381,7 +422,7 @@ export function App(): ReactElement {
             event.status === "failed"
               ? "步骤失败"
               : event.phase === "awaiting_approval"
-                ? "需要确认"
+                ? "需要注意"
                 : "处理中",
           title: event.title,
           detail,
@@ -399,7 +440,7 @@ export function App(): ReactElement {
                 tone: "warning",
                 label: "需要处理",
                 title: "无法读取项目目录",
-                detail: `${event.detail}\n请重新授权项目目录后再试。`,
+                detail: `${event.detail}\n请检查项目目录后再试。`,
               }
             : {
                 tone: "progress",
@@ -419,22 +460,8 @@ export function App(): ReactElement {
         })
         return
       }
-      if (event.type === "capability-request") {
-        showPrompt({
-          tone: "warning",
-          label: "需要授权",
-          title: "等待你的授权",
-          detail: "请检查权限范围。授权后，Pingo 会继续执行。",
-        })
-        return
-      }
-      if (event.type === "approval-request") {
-        showPrompt({
-          tone: "warning",
-          label: "需要确认",
-          title: "等待你的确认",
-          detail: "请检查操作内容与可能影响，确认后继续。",
-        })
+      if (event.type === "capability-request" || event.type === "approval-request") {
+        showPrompt(BLOCKED_TASK_PROMPT)
         return
       }
       if (event.type === "operation-result") {
