@@ -31,6 +31,7 @@ export interface AgentOrchestratorDeps {
   /** 已授权项目时传入，写入 system 上下文 */
   projectAuthorized?: boolean
   projectName?: string
+  projectPath?: string
 }
 
 export class AgentOrchestrator {
@@ -46,6 +47,7 @@ export class AgentOrchestrator {
     const conversation = buildToolConversation(messages, {
       projectAuthorized: this.deps.projectAuthorized,
       projectName: this.deps.projectName,
+      projectPath: this.deps.projectPath,
     })
     let nudgesUsed = 0
 

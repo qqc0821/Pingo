@@ -38,7 +38,133 @@ button {
 }
 
 .app-shell.expanded {
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 8px;
+}
+
+.pet-prompt-layer {
+  flex: 0 0 auto;
+  z-index: 20;
+}
+
+.pet-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 82px;
+  justify-content: center;
+  padding: 14px 20px;
+  border: 1px solid rgb(255 255 255 / 72%);
+  border-radius: 28px;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 14px 30px rgb(15 23 42 / 16%);
+}
+
+.pet-prompt strong,
+.pet-prompt span {
+  min-width: 0;
+}
+
+.pet-prompt strong {
+  overflow: hidden;
+  color: #202123;
+  font-size: 14px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pet-prompt span {
+  max-height: 72px;
+  overflow-y: auto;
+  color: #7a7a80;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  white-space: pre-wrap;
+}
+
+.quick-composer {
+  margin: 10px 12px 0;
+}
+
+.quick-composer-shell {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  overflow: hidden;
+  border: 1px solid #d7d9de;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 98%);
+  box-shadow: 0 8px 18px rgb(15 23 42 / 12%);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.quick-composer-shell:focus-within {
+  border-color: #10a37f;
+  box-shadow: 0 0 0 3px rgb(16 163 127 / 16%);
+}
+
+.quick-composer input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #202123;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 10px 8px 10px 12px;
+}
+
+.quick-composer input::placeholder {
+  color: #92959c;
+}
+
+.quick-composer input:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.quick-composer button {
+  min-height: 28px;
+  margin-right: 6px;
+  padding: 5px 10px;
+  border-radius: 9px;
+  background: #202123;
+  color: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition:
+    background-color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.quick-composer button:hover:not(:disabled) {
+  background: #000;
+}
+
+.quick-composer button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.quick-composer button:focus-visible {
+  outline: 2px solid #10a37f;
+  outline-offset: 2px;
+}
+
+.quick-composer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .task-panel {
@@ -858,6 +984,13 @@ button {
   z-index: 10;
 }
 
+.app-shell.expanded .pet-dock {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  align-self: flex-end;
+}
+
 .app-shell.has-approval .pet-dock {
   opacity: 0;
   pointer-events: none;
@@ -1014,22 +1147,8 @@ button {
   animation: pet-image-enter 260ms var(--pet-ease-out) both;
 }
 
-/* Black-background AI videos: screen-blend makes #000 disappear on the transparent window.
-   True alpha WebM is better long-term (export green-screen / transparent from the AI tool). */
-.pet-face--video,
-.pet-face--video.pet-face--active {
-  background: transparent;
-  filter: none;
-  mix-blend-mode: screen;
-  animation: none;
-}
-
 .pet-button:is(.pet-state-happy, .pet-state-encourage, .pet-state-celebrate) .pet-face--active {
   filter: blur(0) brightness(1.04) saturate(1.08) drop-shadow(0 6px 6px rgb(120 71 20 / 22%));
-}
-
-.pet-motion--video {
-  animation: none;
 }
 
 .pet-motion--idle {
@@ -1070,52 +1189,6 @@ button {
 
 .pet-motion--celebrate {
   animation: pet-celebrate-bounce 880ms ease-in-out infinite;
-}
-
-.pet-state {
-  position: absolute;
-  right: 10px;
-  bottom: 8px;
-  left: 10px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgb(15 23 42 / 48%);
-  color: rgb(255 255 255 / 84%);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-shadow: 0 1px 3px rgb(15 23 42 / 40%);
-  overflow-wrap: anywhere;
-  text-align: center;
-  transform: translateY(0);
-  transition:
-    background-color 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    box-shadow 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    color 320ms ease-out,
-    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.pet-button:is(.pet-state-happy, .pet-state-encourage, .pet-state-celebrate) .pet-state {
-  background-color: rgb(120 71 20 / 58%);
-  box-shadow: 0 0 14px rgb(251 191 36 / 12%);
-  color: #fff7df;
-  transform: translateY(-1px);
-  transition-delay: 60ms;
-}
-
-.pet-button:is(.pet-state-thinking, .pet-state-reminder) .pet-state {
-  background-color: rgb(12 74 110 / 62%);
-  color: #e0f2fe;
-}
-
-.pet-button.pet-state-worried .pet-state {
-  background-color: rgb(76 29 149 / 58%);
-  color: #f3e8ff;
-}
-
-.pet-button:is(.pet-state-sleepy, .pet-state-focus, .pet-state-nod) .pet-state {
-  background-color: rgb(6 78 59 / 58%);
-  color: #d1fae5;
 }
 
 @keyframes pet-image-enter {
@@ -1287,7 +1360,9 @@ button {
 @media (prefers-reduced-motion: reduce) {
   .pet-button,
   .pet-visual,
-  .loading-ring {
+  .loading-ring,
+  .quick-composer-shell,
+  .quick-composer button {
     animation: none !important;
     transition: none !important;
   }
@@ -1307,12 +1382,5 @@ button {
   .pet-visual::after {
     transform: none !important;
     transition: none;
-  }
-
-  .pet-state {
-    transform: none !important;
-    transition:
-      background-color 120ms ease-out,
-      color 120ms ease-out;
   }
 }

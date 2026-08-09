@@ -153,6 +153,77 @@ test("write tools stop at an immutable approval preview and execute only after a
   }
 })
 
+test("desktop auto mode executes project writes without permission or approval events", async () => {
+  const previousFetch = globalThis.fetch
+  const previousKey = process.env.MODEL_API_KEY
+  const root = mkdtempSync(join(tmpdir(), "pingo-auto-task-"))
+  const filePath = join(root, "note.txt")
+  writeFileSync(filePath, "before\n")
+  const store = new SettingsStore(join(root, "data"))
+  store.setAuthorizedProjectPath(root)
+  const manager = new TaskManager({
+    settingsStore: store,
+    auditLogger: new AuditLogger(join(root, "audit.jsonl")),
+    skipUserConfirmation: true,
+  })
+  const events: ChatStreamEvent[] = []
+  let requestCount = 0
+
+  try {
+    process.env.MODEL_API_KEY = "test-key"
+    globalThis.fetch = async () => {
+      requestCount += 1
+      if (requestCount === 1) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "write-auto-1",
+                      type: "function",
+                      function: {
+                        name: "write_file",
+                        arguments: JSON.stringify({ path: "note.txt", content: "after\n" }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已完成修改。" } }] }), {
+        status: 200,
+      })
+    }
+    manager.submit("window-auto", [{ role: "user", content: "修改 note.txt" }], (event) =>
+      events.push(event),
+    )
+    await waitFor(() =>
+      events.some((event) => event.type === "task-state" && event.state === "completed"),
+    )
+
+    assert.equal(readFileSync(filePath, "utf8"), "after\n")
+    assert.equal(
+      events.some((event) => event.type === "capability-request"),
+      false,
+    )
+    assert.equal(
+      events.some((event) => event.type === "approval-request"),
+      false,
+    )
+  } finally {
+    globalThis.fetch = previousFetch
+    if (previousKey === undefined) delete process.env.MODEL_API_KEY
+    else process.env.MODEL_API_KEY = previousKey
+  }
+})
+
 test("terminal_intent uses the real approval, script binding, Seatbelt runner, and one-time decision chain", async () => {
   const previousFetch = globalThis.fetch
   const previousKey = process.env.MODEL_API_KEY

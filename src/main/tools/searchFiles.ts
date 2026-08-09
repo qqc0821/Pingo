@@ -49,7 +49,14 @@ function walk(
 ): void {
   if (results.length >= MAX_SEARCH_RESULTS) return
 
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+  let entries: import("node:fs").Dirent[]
+  try {
+    entries = readdirSync(directory, { withFileTypes: true })
+  } catch {
+    return
+  }
+
+  for (const entry of entries) {
     if (results.length >= MAX_SEARCH_RESULTS) return
     if (!consumeScanEntry(budget)) return
     const absolutePath = join(directory, entry.name)
@@ -68,11 +75,15 @@ function walk(
       continue
     }
 
-    const stats = statSync(absolutePath)
-    if (stats.size > MAX_FILE_BYTES) continue
-    const buffer = readFileSync(absolutePath)
-    if (!isBinaryBuffer(buffer) && buffer.toString("utf8").toLowerCase().includes(query)) {
-      results.push(`${relativePath}（内容匹配）`)
+    try {
+      const stats = statSync(absolutePath)
+      if (stats.size > MAX_FILE_BYTES) continue
+      const buffer = readFileSync(absolutePath)
+      if (!isBinaryBuffer(buffer) && buffer.toString("utf8").toLowerCase().includes(query)) {
+        results.push(`${relativePath}（内容匹配）`)
+      }
+    } catch {
+      // 文件可能无读取权限或在扫描期间被移动；忽略后继续扫描。
     }
   }
 }

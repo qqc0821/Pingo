@@ -10,7 +10,7 @@ import type {
 import type { SettingsStore } from "./store.js"
 
 export const COLLAPSED_SIZE = { width: 132, height: 132 }
-export const EXPANDED_SIZE = { width: 392, height: 640 }
+export const EXPANDED_SIZE = { width: 392, height: 312 }
 
 const EDGE_SNAP_DISTANCE = 24
 const WINDOW_MARGIN = 16

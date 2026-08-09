@@ -1,7 +1,29 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { buildToolConversation } from "../src/main/agent/contextBuilder.js"
 import { AgentOrchestrator } from "../src/main/agent/orchestrator.js"
 import type { ChatStreamEvent } from "../src/shared/types.js"
+
+test("已授权时把目录绝对路径写入 system 上下文", () => {
+  const conversation = buildToolConversation([{ role: "user", content: "Pingo 的路径是什么" }], {
+    projectAuthorized: true,
+    projectName: "Pingo",
+    projectPath: "/Users/demo/Projects/Pingo",
+  })
+
+  const system = conversation.at(0)
+  assert.equal(system?.role, "system")
+  assert.match(String(system?.content), /\/Users\/demo\/Projects\/Pingo/)
+})
+
+test("未授权时不注入任何绝对路径", () => {
+  const conversation = buildToolConversation([{ role: "user", content: "Pingo 的路径是什么" }], {
+    projectAuthorized: false,
+    projectPath: "/Users/demo/Projects/Pingo",
+  })
+
+  assert.doesNotMatch(String(conversation.at(0)?.content), /\/Users\/demo/)
+})
 
 test("无 toolCalls 时直接结束并发出最终内容和步骤", async () => {
   const events: ChatStreamEvent[] = []

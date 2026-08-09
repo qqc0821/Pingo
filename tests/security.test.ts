@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import test from "node:test"
 import { listFiles } from "../src/main/tools/listFiles.js"
 import { readFile } from "../src/main/tools/readFile.js"
+import { executeTool } from "../src/main/tools/registry.js"
 import { searchFiles } from "../src/main/tools/searchFiles.js"
 import { MAX_SCAN_ENTRIES } from "../src/main/security/pathGuard.js"
 
@@ -61,6 +62,39 @@ test("递归发现跳过依赖和产物目录，但保留根目录和源码文�
       searchFiles(root, { query: "should not appear" }),
       /node_modules|out\/|dist\//,
     )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("授权目录内存在不可读子目录时，扫描跳过它而不是整体失败", () => {
+  const root = mkdtempSync(join(tmpdir(), "pingo-eperm-"))
+  const lockedDirectory = join(root, "locked")
+  try {
+    mkdirSync(lockedDirectory)
+    writeFileSync(join(lockedDirectory, "hidden.txt"), "unreachable\n")
+    writeFileSync(join(root, "visible.ts"), "export const answer = 42\n")
+    chmodSync(lockedDirectory, 0o000)
+
+    const listed = listFiles(root, {})
+    assert.match(listed, /visible\.ts/)
+    assert.doesNotMatch(listed, /hidden\.txt/)
+    assert.match(searchFiles(root, { query: "answer" }), /visible\.ts/)
+  } finally {
+    chmodSync(lockedDirectory, 0o700)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("工具失败时回给模型的提示只描述单个目标，不泄漏 errno", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pingo-errno-"))
+  try {
+    const missing = await executeTool(root, "list_files", { directory: "does-not-exist" })
+    assert.doesNotMatch(missing.content, /ENOENT/)
+    assert.match(missing.content, /list_files/)
+
+    const notAFile = await executeTool(root, "read_file", { path: "." })
+    assert.doesNotMatch(notAFile.content, /ENOENT|EISDIR|EPERM|ENOTDIR/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

@@ -45,7 +45,14 @@ function walk(
 ): void {
   if (results.length >= MAX_LIST_RESULTS) return
 
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+  let entries: import("node:fs").Dirent[]
+  try {
+    entries = readdirSync(directory, { withFileTypes: true })
+  } catch {
+    return
+  }
+
+  for (const entry of entries) {
     if (results.length >= MAX_LIST_RESULTS) return
     if (!consumeScanEntry(budget)) return
     const absolutePath = join(directory, entry.name)

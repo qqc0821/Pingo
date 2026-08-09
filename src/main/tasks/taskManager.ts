@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { homedir } from "node:os"
 import { isAbsolute, relative, sep } from "node:path"
 import type {
   ApprovalRequest,
@@ -66,6 +67,8 @@ interface CapabilityAccess {
 
 export interface TaskManagerDependencies {
   settingsStore: SettingsStore
+  /** Desktop app mode: execute supported operations without user permission/approval cards. */
+  skipUserConfirmation?: boolean
   capabilityManager?: CapabilityManager
   approvalBroker?: ApprovalBroker
   auditLogger: AuditLogger
@@ -331,8 +334,10 @@ export class TaskManager {
     this.emitState(task, "planning")
     try {
       this.handleModelEvent(task, { type: "start" })
-      const projectPath = this.dependencies.settingsStore.getAuthorizedProjectPath()
-      const projectName = projectPath ? projectPath.split(/[/\\]/).filter(Boolean).at(-1) : undefined
+      const projectPath = this.getActiveProjectPath()
+      const projectName = projectPath
+        ? projectPath.split(/[/\\]/).filter(Boolean).at(-1)
+        : undefined
       const orchestrator = new AgentOrchestrator({
         taskId: task.taskId,
         client: task.client,
@@ -343,6 +348,7 @@ export class TaskManager {
         isCancelled: () => task.cancelled,
         projectAuthorized: Boolean(projectPath),
         projectName,
+        projectPath,
       })
       await orchestrator.run(messages)
       if (!isTerminal(task.state) && !task.cancelled) {
@@ -468,7 +474,8 @@ export class TaskManager {
     options: { forceApproval?: boolean } = {},
   ): Promise<{ content: string; detail: string; policyFailure?: TerminalPolicyFailure }> {
     const grant = await this.waitForCapability(task, "terminal.execute")
-    if (!grant || !grant.grant) return deniedExecution("terminal.execute")
+    if (!grant || (!grant.grant && !grant.trustedWorkspace))
+      return deniedExecution("terminal.execute")
     if (!this.terminalFeatureFlags.terminalV2Enabled) {
       const policyFailure = terminalFailure(
         "command_forbidden",
@@ -540,8 +547,16 @@ export class TaskManager {
       async () => {
         if (!plan.terminalPlan) throw new Error("Terminal 计划缺失")
         revalidateTerminalPlan(projectPath, plan.terminalPlan)
-        this.capabilityManager.assertAllowed("terminal.execute", plan.targets, task.sourceWindowId)
-        this.capabilityManager.consume(sessionGrant.grantId)
+        if (grant.trustedWorkspace) {
+          this.assertTrustedWorkspaceTargets(plan.targets)
+        } else if (sessionGrant) {
+          this.capabilityManager.assertAllowed(
+            "terminal.execute",
+            plan.targets,
+            task.sourceWindowId,
+          )
+          this.capabilityManager.consume(sessionGrant.grantId)
+        }
         task.activeTerminalOperationId = plan.operationId
         try {
           const startedAt = Date.now()
@@ -646,6 +661,9 @@ export class TaskManager {
     execute: () => Promise<OperationResult>,
     options: { forceApproval?: boolean } = {},
   ): Promise<OperationResult> {
+    if (this.dependencies.skipUserConfirmation) {
+      return this.executeTrustedOperation(task, plan, execute)
+    }
     const trustUsed = Boolean(
       !options.forceApproval &&
       plan.terminalPlan &&
@@ -803,6 +821,7 @@ export class TaskManager {
     task: TaskRecord,
     capability: Capability,
   ): Promise<CapabilityAccess | null> {
+    if (this.dependencies.skipUserConfirmation) return { trustedWorkspace: true }
     const projectPath = this.dependencies.settingsStore.getAuthorizedProjectPath()
     if (projectPath && capability !== "terminal.execute" && this.isTrustedWorkspace(projectPath)) {
       return { trustedWorkspace: true }
@@ -849,9 +868,27 @@ export class TaskManager {
   }
 
   private requireProjectPath(): string {
-    const projectPath = this.dependencies.settingsStore.getAuthorizedProjectPath()
-    if (!projectPath) throw new Error("尚未选择授权目录")
+    const projectPath = this.getActiveProjectPath()
+    if (!projectPath) throw new Error("当前项目目录不可访问")
     return projectPath
+  }
+
+  private getActiveProjectPath(): string | undefined {
+    const preferencesPath = this.dependencies.settingsStore.getPreferences().defaultLocation.trim()
+    const rememberedPath = this.dependencies.settingsStore.getAuthorizedProjectPath()
+    const usableRememberedPath = rememberedPath === homedir() ? undefined : rememberedPath
+    const candidates = this.dependencies.skipUserConfirmation
+      ? [preferencesPath, usableRememberedPath, process.cwd()]
+      : [rememberedPath, preferencesPath]
+    for (const candidate of candidates) {
+      if (!candidate) continue
+      try {
+        return getRealProjectRoot(candidate)
+      } catch {
+        // Try the next configured location.
+      }
+    }
+    return undefined
   }
 
   private isTrustedWorkspace(projectPath: string): boolean {
@@ -865,6 +902,13 @@ export class TaskManager {
   }
 
   private assertTrustedWorkspaceTargets(targets: string[]): void {
+    if (this.dependencies.skipUserConfirmation) {
+      const root = this.requireProjectPath()
+      if (!targets.every((target) => isWithinRoot(root, target))) {
+        throw new Error("操作目标越过当前项目目录")
+      }
+      return
+    }
     const trusted = this.dependencies.settingsStore.getTrustedWorkspace()
     if (!trusted) throw new Error("持续目录授权已关闭")
     const root = getRealProjectRoot(trusted.path)

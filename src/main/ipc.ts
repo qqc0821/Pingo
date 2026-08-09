@@ -31,6 +31,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     settingsStore,
     auditLogger,
     terminalRunStore,
+    skipUserConfirmation: true,
   })
 
   app.on("browser-window-created", (_event, window) => {
@@ -80,7 +81,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
 
   ipcMain.handle("project:choose", async (event) => {
     assertTrustedSender(event.sender)
-    const realSelectedPath = await chooseDirectory("选择要授权给 Pingo 的项目目录")
+    const realSelectedPath = await chooseDirectory(settingsStore, "选择 Pingo 项目目录")
     if (!realSelectedPath) return null
     taskManager.revokeAllCapabilities()
     settingsStore.clearTrustedWorkspace()
@@ -99,7 +100,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     assertTrustedSender(event.sender)
     const request = parseOpenPathRequest(value)
     const projectPath = settingsStore.getAuthorizedProjectPath()
-    if (!projectPath) throw new Error("尚未选择授权目录")
+    if (!projectPath) throw new Error("当前项目目录不可用")
     const root = getRealProjectRoot(projectPath)
     const candidate = isAbsolute(request.path) ? request.path : resolve(root, request.path)
     const target = realpathSync.native(candidate)
@@ -111,7 +112,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
       isSensitiveRelativePath(targetRelative) ||
       !statSync(target).isFile()
     ) {
-      throw new Error("日志路径不在授权项目的普通文件范围内")
+      throw new Error("日志路径不在当前项目的普通文件范围内")
     }
     const error = await shell.openPath(target)
     if (error) throw new Error(error)
@@ -125,7 +126,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
 
   ipcMain.handle("trusted-workspace:choose", async (event): Promise<TrustedWorkspace | null> => {
     assertTrustedSender(event.sender)
-    const selectedPath = await chooseDirectory("选择要持续授权给 Pingo 的目录")
+    const selectedPath = await chooseDirectory(settingsStore, "选择 Pingo 项目目录")
     if (!selectedPath) return null
     taskManager.revokeAllCapabilities()
     settingsStore.setTrustedWorkspace(selectedPath)
@@ -221,15 +222,15 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     const configuredProject = settingsStore.getAuthorizedProjectPath()
     let selectedPath = configuredProject
     if (!selectedPath) {
+      const defaultPath = getSuggestedProjectPath(settingsStore)
+      const options: OpenDialogOptions = {
+        title: "选择要授权给 Pingo 的项目目录",
+        properties: ["openDirectory", "createDirectory"],
+        ...(defaultPath ? { defaultPath } : {}),
+      }
       const result = owner
-        ? await dialog.showOpenDialog(owner, {
-            title: "选择要授权给 Pingo 的目录",
-            properties: ["openDirectory", "createDirectory"],
-          })
-        : await dialog.showOpenDialog({
-            title: "选择要授权给 Pingo 的目录",
-            properties: ["openDirectory", "createDirectory"],
-          })
+        ? await dialog.showOpenDialog(owner, options)
+        : await dialog.showOpenDialog(options)
       if (result.canceled || !result.filePaths.at(0)) {
         taskManager.denyCapability(String(event.sender.id), request.taskId)
         return null
@@ -312,10 +313,15 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
   })
 }
 
-async function chooseDirectory(title: string): Promise<string | null> {
+async function chooseDirectory(
+  settingsStore: SettingsStore,
+  title: string,
+): Promise<string | null> {
+  const defaultPath = getSuggestedProjectPath(settingsStore)
   const options: OpenDialogOptions = {
     title,
     properties: ["openDirectory", "createDirectory"],
+    ...(defaultPath ? { defaultPath } : {}),
   }
   const owner = getPetWindow()
   const result = owner
@@ -466,6 +472,23 @@ function getProjectInfo(projectPath: string | undefined) {
     return { path: realPath, name: basename(realPath) }
   } catch {
     return null
+  }
+}
+
+function getSuggestedProjectPath(settingsStore: SettingsStore): string | undefined {
+  return [
+    settingsStore.getTrustedWorkspace()?.path,
+    settingsStore.getAuthorizedProjectPath(),
+    app.isPackaged ? undefined : process.cwd(),
+  ].find(isExistingDirectory)
+}
+
+function isExistingDirectory(value: string | undefined): value is string {
+  if (!value || !isAbsolute(value)) return false
+  try {
+    return statSync(value).isDirectory()
+  } catch {
+    return false
   }
 }
 
