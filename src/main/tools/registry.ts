@@ -2,13 +2,17 @@ import { listFiles } from "./listFiles.js"
 import { readFile } from "./readFile.js"
 import { searchFiles } from "./searchFiles.js"
 import type { ToolDefinition, ToolExecution } from "./types.js"
+import {
+  buildTerminalIntentSchema,
+  getEnabledIntentPackDefinitions,
+} from "../terminal/intentPacks.js"
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     type: "function",
     function: {
       name: "list_files",
-      description: "列出用户已经授权的项目目录中的文本文件路径。不要猜测绝对路径。",
+      description: "列出当前项目目录中的项目文件路径。不要猜测绝对路径。",
       parameters: {
         type: "object",
         properties: {
@@ -22,7 +26,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "search_files",
-      description: "在已授权项目内搜索文件名或文本内容。",
+      description: "在当前项目内搜索文件名或文本内容。",
       parameters: {
         type: "object",
         properties: {
@@ -38,7 +42,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "read_file",
-      description: "读取已授权项目内文本文件的有限行范围。不要读取密钥、环境变量或二进制文件。",
+      description: "读取当前项目内文本文件的有限行范围。不要读取密钥、环境变量或二进制文件。",
       parameters: {
         type: "object",
         properties: {
@@ -55,7 +59,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "create_directory",
-      description: "在已经授权的目录内创建一个目录；执行前必须确认预览。",
+      description: "在当前项目目录内创建一个目录。",
       parameters: {
         type: "object",
         properties: { path: { type: "string", description: "项目内相对目录路径" } },
@@ -68,7 +72,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "write_file",
-      description: "创建或原子修改授权目录内的文本文件；执行前必须确认 diff。",
+      description: "创建或原子修改当前项目目录内的文本文件。",
       parameters: {
         type: "object",
         properties: {
@@ -86,7 +90,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "apply_patch",
-      description: "对授权目录内的文本文件应用 unified diff；执行前必须确认 diff。",
+      description: "对当前项目目录内的文本文件应用 unified diff。",
       parameters: {
         type: "object",
         properties: {
@@ -103,7 +107,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "move_path",
-      description: "移动或重命名授权目录内的路径；执行前必须确认完整路径。",
+      description: "移动或重命名当前项目目录内的路径。",
       parameters: {
         type: "object",
         properties: {
@@ -120,7 +124,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "trash_path",
-      description: "将授权目录内的路径移入可恢复废纸篓；执行前必须强确认。",
+      description: "将当前项目目录内的路径移入可恢复废纸篓。",
       parameters: {
         type: "object",
         properties: {
@@ -136,27 +140,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "terminal_intent",
-      description:
-        "提出受限 TerminalIntent。只能使用 git.read(status/diff/log) 或 project.script(lint/typecheck/format:check/test/build)；executable、argv、环境、风险和沙箱由 Pingo 主进程决定。每条命令都要用户运行一次确认。",
-      parameters: {
-        type: "object",
-        properties: {
-          kind: { type: "string", enum: ["git.read", "project.script"] },
-          action: { type: "string", enum: ["status", "diff", "log"] },
-          args: { type: "array", items: { type: "string" } },
-          packageManager: { type: "string", enum: ["npm"] },
-          script: { type: "string", enum: ["lint", "typecheck", "format:check", "test", "build"] },
-          forwardedArgs: { type: "array", items: { type: "string" } },
-          cwd: { type: "string", description: "workspace 内相对工作目录" },
-        },
-        required: ["kind", "cwd"],
-        additionalProperties: false,
-      },
+      description: `提出受限 TerminalIntent。可用清单：${getEnabledIntentPackDefinitions()
+        .map((definition) => definition.kind)
+        .join("、")}；executable、argv、环境、风险和沙箱由 Pingo 主进程决定。`,
+      parameters: buildTerminalIntentSchema(),
     },
   },
 ]
 
 export const READ_ONLY_TOOL_NAMES = new Set(["list_files", "search_files", "read_file"])
+export const READ_ONLY_TOOL_DEFINITIONS = TOOL_DEFINITIONS.filter((definition) =>
+  READ_ONLY_TOOL_NAMES.has(definition.function.name),
+)
 
 export async function executeTool(
   projectPath: string | undefined,
@@ -165,16 +160,16 @@ export async function executeTool(
 ): Promise<ToolExecution> {
   if (!projectPath) {
     return {
-      content: "用户尚未选择项目目录，请先让用户授权一个项目目录。",
-      detail: "未选择项目目录",
+      content: "当前项目目录不可用，请检查项目位置后重试。",
+      detail: "项目目录不可用",
     }
   }
 
   try {
     if (!READ_ONLY_TOOL_NAMES.has(name)) {
       return {
-        content: `工具 ${name} 必须经过 Pingo 的权限和逐次确认流程。`,
-        detail: `已阻止未接入 broker 的工具 ${name}`,
+        content: `工具 ${name} 不支持直接执行。`,
+        detail: `已阻止未接入执行器的工具 ${name}`,
       }
     }
     switch (name) {
@@ -191,8 +186,34 @@ export async function executeTool(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "工具执行失败"
-    return { content: `工具未执行：${message}`, detail: `读取被拒绝：${message}` }
+    return { content: describeToolFailure(error, message), detail: `读取被拒绝：${message}` }
   }
+}
+
+/**
+ * 文件系统错误直接回给模型时不应被误读为整个项目目录不可用。
+ * 这里把 errno 翻译成只描述单个目标的提示，并保留下一步动作。
+ */
+function describeToolFailure(error: unknown, fallbackMessage: string): string {
+  switch (getErrorCode(error)) {
+    case "ENOENT":
+      return "工具未执行：这个相对路径在当前项目中不存在。项目目录本身仍然可用，请先用 list_files 确认真实路径再重试。"
+    case "EACCES":
+    case "EPERM":
+      return "工具未执行：这个路径没有读取权限，已跳过。项目目录本身仍然可用，请改用目录内的其他路径。"
+    case "EISDIR":
+      return "工具未执行：这个路径是目录而不是文件，请改用 list_files 查看它的内容。"
+    case "ENOTDIR":
+      return "工具未执行：这个路径是文件而不是目录，请改用 read_file 读取它。"
+    default:
+      return `工具未执行：${fallbackMessage}`
+  }
+}
+
+function getErrorCode(error: unknown): string {
+  if (typeof error !== "object" || error === null || !("code" in error)) return ""
+  const code = (error as { code: unknown }).code
+  return typeof code === "string" ? code : ""
 }
 
 function getPathArg(value: unknown): string {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { homedir } from "node:os"
 import { isAbsolute, relative, sep } from "node:path"
 import type {
   ApprovalRequest,
@@ -16,9 +17,11 @@ import type {
   TaskState,
 } from "../../shared/types.js"
 import { ModelClient } from "../ai/client.js"
+import { AgentOrchestrator } from "../agent/orchestrator.js"
 import { AuditLogger } from "../security/auditLogger.js"
 import { ApprovalBroker } from "../security/approvalBroker.js"
 import { CapabilityManager } from "../security/capabilityManager.js"
+import { TerminalTrustManager } from "../security/terminalTrust.js"
 import { classifyOperation } from "../security/riskClassifier.js"
 import {
   compileTerminalIntent,
@@ -32,8 +35,10 @@ import { getTerminalFeatureFlags, type TerminalFeatureFlags } from "../terminal/
 import { executeTool, READ_ONLY_TOOL_NAMES, TOOL_DEFINITIONS } from "../tools/registry.js"
 import { planFileOperation, type PlannedFileOperation } from "../tools/fileOperations.js"
 import { getRealProjectRoot } from "../security/pathGuard.js"
+import { detectSandboxDenial } from "../terminal/policyCatalog.js"
 import type { SettingsStore } from "../store.js"
 import { UndoManager } from "./undoManager.js"
+import type { TerminalRunLedgerRecord, TerminalRunStore } from "../terminal/runStore.js"
 
 export type TaskEventSink = (event: ChatStreamEvent) => void
 
@@ -62,11 +67,15 @@ interface CapabilityAccess {
 
 export interface TaskManagerDependencies {
   settingsStore: SettingsStore
+  /** Desktop app mode: execute supported operations without user permission/approval cards. */
+  skipUserConfirmation?: boolean
   capabilityManager?: CapabilityManager
   approvalBroker?: ApprovalBroker
   auditLogger: AuditLogger
   terminalRunner?: TerminalRunner
   terminalFeatureFlags?: TerminalFeatureFlags
+  terminalTrustManager?: TerminalTrustManager
+  terminalRunStore?: Pick<TerminalRunStore, "recordTerminalRun" | "getTerminalRun">
 }
 
 export class TaskManager {
@@ -75,6 +84,7 @@ export class TaskManager {
   private readonly approvalBroker: ApprovalBroker
   private readonly terminalRunner: TerminalRunner
   private readonly terminalFeatureFlags: TerminalFeatureFlags
+  private readonly terminalTrustManager: TerminalTrustManager
   private readonly undoManager = new UndoManager()
 
   constructor(private readonly dependencies: TaskManagerDependencies) {
@@ -82,6 +92,7 @@ export class TaskManager {
     this.approvalBroker = dependencies.approvalBroker ?? new ApprovalBroker()
     this.terminalRunner = dependencies.terminalRunner ?? new TerminalRunner()
     this.terminalFeatureFlags = dependencies.terminalFeatureFlags ?? getTerminalFeatureFlags()
+    this.terminalTrustManager = dependencies.terminalTrustManager ?? new TerminalTrustManager()
   }
 
   submit(
@@ -104,6 +115,25 @@ export class TaskManager {
     this.emitState(task, "proposed")
     void this.run(task, messages)
     return taskId
+  }
+
+  rerunTerminalRun(sourceWindowId: string, runId: string, emit: TaskEventSink): { taskId: string } {
+    const record = this.dependencies.terminalRunStore?.getTerminalRun(runId)
+    if (!record) throw new Error("运行记录不存在")
+    const taskId = randomUUID()
+    const task: TaskRecord = {
+      taskId,
+      sourceWindowId,
+      emit,
+      controller: new AbortController(),
+      client: new ModelClient(),
+      state: "proposed",
+      cancelled: false,
+    }
+    this.tasks.set(taskId, task)
+    this.emitState(task, "proposed")
+    void this.runRerun(task, record)
+    return { taskId }
   }
 
   cancel(taskId: string, sourceWindowId: string): boolean {
@@ -281,6 +311,7 @@ export class TaskManager {
 
   revokeAllCapabilities(): void {
     this.capabilityManager.revokeAll()
+    this.terminalTrustManager.revokeAll()
     this.approvalBroker.cancelAll()
     this.cancelAll()
   }
@@ -289,17 +320,39 @@ export class TaskManager {
     return this.dependencies.auditLogger.list()
   }
 
+  listTerminalTrust(): ReturnType<TerminalTrustManager["list"]> {
+    return this.terminalTrustManager.list()
+  }
+
+  revokeAllTerminalTrust(): void {
+    this.terminalTrustManager.revokeAll()
+    this.approvalBroker.cancelAll()
+    this.cancelAll()
+  }
+
   private async run(task: TaskRecord, messages: ChatMessageInput[]): Promise<void> {
     this.emitState(task, "planning")
     try {
-      await task.client.stream(
-        messages,
-        (event) => this.handleModelEvent(task, event),
-        (name, args) => this.executeTool(task, name, args),
-        TOOL_DEFINITIONS,
-      )
+      this.handleModelEvent(task, { type: "start" })
+      const projectPath = this.getActiveProjectPath()
+      const projectName = projectPath
+        ? projectPath.split(/[/\\]/).filter(Boolean).at(-1)
+        : undefined
+      const orchestrator = new AgentOrchestrator({
+        taskId: task.taskId,
+        client: task.client,
+        toolDefinitions: TOOL_DEFINITIONS,
+        executeTool: (name, args) => this.executeTool(task, name, args),
+        isReadOnlyTool: (name) => READ_ONLY_TOOL_NAMES.has(name),
+        emit: (event) => this.handleModelEvent(task, event),
+        isCancelled: () => task.cancelled,
+        projectAuthorized: Boolean(projectPath),
+        projectName,
+        projectPath,
+      })
+      await orchestrator.run(messages)
       if (!isTerminal(task.state) && !task.cancelled) {
-        this.emitState(task, "completed")
+        this.handleModelEvent(task, { type: "done" })
       }
     } catch (error) {
       if (task.cancelled) return
@@ -418,9 +471,11 @@ export class TaskManager {
   private async executeTerminalOperation(
     task: TaskRecord,
     args: unknown,
+    options: { forceApproval?: boolean } = {},
   ): Promise<{ content: string; detail: string; policyFailure?: TerminalPolicyFailure }> {
     const grant = await this.waitForCapability(task, "terminal.execute")
-    if (!grant || !grant.grant) return deniedExecution("terminal.execute")
+    if (!grant || (!grant.grant && !grant.trustedWorkspace))
+      return deniedExecution("terminal.execute")
     if (!this.terminalFeatureFlags.terminalV2Enabled) {
       const policyFailure = terminalFailure(
         "command_forbidden",
@@ -486,59 +541,95 @@ export class TaskManager {
       expiresAt: terminalPlan.expiresAt,
       reversible: false,
     }
-    const result = await this.confirmAndExecute(task, plan, async () => {
-      if (!plan.terminalPlan) throw new Error("Terminal 计划缺失")
-      revalidateTerminalPlan(projectPath, plan.terminalPlan)
-      this.capabilityManager.assertAllowed("terminal.execute", plan.targets, task.sourceWindowId)
-      this.capabilityManager.consume(sessionGrant.grantId)
-      task.activeTerminalOperationId = plan.operationId
-      try {
-        const run = await this.terminalRunner.run(plan.terminalPlan, {
-          signal: task.controller.signal,
-        })
-        const policyFailure = run.cancelled
-          ? terminalFailure(
-              "cancelled",
-              "Terminal operation 已取消并确认进程已结束",
-              true,
-              "ask_user",
-            )
-          : run.timedOut
+    const result = await this.confirmAndExecute(
+      task,
+      plan,
+      async () => {
+        if (!plan.terminalPlan) throw new Error("Terminal 计划缺失")
+        revalidateTerminalPlan(projectPath, plan.terminalPlan)
+        if (grant.trustedWorkspace) {
+          this.assertTrustedWorkspaceTargets(plan.targets)
+        } else if (sessionGrant) {
+          this.capabilityManager.assertAllowed(
+            "terminal.execute",
+            plan.targets,
+            task.sourceWindowId,
+          )
+          this.capabilityManager.consume(sessionGrant.grantId)
+        }
+        task.activeTerminalOperationId = plan.operationId
+        try {
+          const startedAt = Date.now()
+          const run = await this.terminalRunner.run(plan.terminalPlan, {
+            signal: task.controller.signal,
+            onProgress: (event) => task.emit(event),
+          })
+          const policyFailure = run.cancelled
             ? terminalFailure(
-                "timed_out",
-                "Terminal operation 超时并已终止进程树",
+                "cancelled",
+                "Terminal operation 已取消并确认进程已结束",
                 true,
                 "ask_user",
               )
-            : run.truncated
+            : run.timedOut
               ? terminalFailure(
-                  "output_limit_exceeded",
-                  "Terminal 输出超过限制并已终止进程树",
+                  "timed_out",
+                  "Terminal operation 超时并已终止进程树",
                   true,
-                  "change_approach",
+                  "ask_user",
                 )
-              : undefined
-        const status = run.cancelled
-          ? "cancelled"
-          : run.exitCode === 0 && !run.timedOut && !run.truncated
-            ? "completed"
-            : "failed"
-        return {
-          operationId: plan.operationId,
-          status,
-          content:
-            run.content || (status === "completed" ? "命令完成，无输出。" : "命令未成功完成。"),
-          detail: `exitCode=${String(run.exitCode)} signal=${String(run.signal)}${run.timedOut ? " timeout" : ""}`,
-          reversible: false,
-          exitCode: run.exitCode,
-          signal: run.signal,
-          truncated: run.truncated,
-          policyFailure,
+              : run.hardLimitExceeded
+                ? terminalFailure(
+                    "output_limit_exceeded",
+                    "Terminal 输出超过限制并已终止进程树",
+                    true,
+                    "change_approach",
+                  )
+                : detectSandboxDenial(run.content)
+          const status = run.cancelled
+            ? "cancelled"
+            : run.exitCode === 0 && !run.timedOut && !run.hardLimitExceeded
+              ? "completed"
+              : "failed"
+          const intent = plan.terminalPlan.intent as { kind: string; action?: string }
+          this.dependencies.terminalRunStore?.recordTerminalRun({
+            runId: randomUUID(),
+            operationId: plan.operationId,
+            taskId: task.taskId,
+            intentKind: intent.kind,
+            ...(intent.action === undefined ? {} : { intentAction: intent.action }),
+            argv: plan.terminalPlan.argv,
+            cwdRelative: plan.terminalPlan.cwd.relativePath,
+            planDigest: plan.terminalPlan.planDigest,
+            fingerprint: readableFingerprint(plan.terminalPlan.planDigest).join(" "),
+            status,
+            exitCode: run.exitCode,
+            ...(policyFailure ? { policyCode: policyFailure.code } : {}),
+            durationMs: run.durationMs,
+            outputBytes: run.outputBytes,
+            outputRedacted: run.content,
+            truncated: run.truncated,
+            startedAt,
+            finishedAt: Date.now(),
+          })
+          return {
+            operationId: plan.operationId,
+            status,
+            content:
+              run.content || (status === "completed" ? "命令完成，无输出。" : "命令未成功完成。"),
+            detail: `exitCode=${String(run.exitCode)} signal=${String(run.signal)}${run.timedOut ? " timeout" : ""}`,
+            reversible: false,
+            exitCode: run.exitCode,
+            signal: run.signal,
+            truncated: run.truncated,
+            policyFailure,
+          }
+        } finally {
+          task.activeTerminalOperationId = undefined
         }
-      } finally {
-        task.activeTerminalOperationId = undefined
-      }
-    })
+      },
+      options,
+    )
     return {
       content: result.policyFailure
         ? `[policy_code=${result.policyFailure.policy_code}] ${result.content}`
@@ -548,15 +639,42 @@ export class TaskManager {
     }
   }
 
+  private async runRerun(task: TaskRecord, record: TerminalRunLedgerRecord): Promise<void> {
+    this.emitState(task, "planning")
+    try {
+      const result = await this.executeTerminalOperation(task, terminalIntentFromLedger(record), {
+        forceApproval: true,
+      })
+      if (!isTerminal(task.state))
+        this.emitState(task, result.policyFailure ? "failed" : "completed")
+      task.emit({ type: "done" })
+    } catch (error) {
+      if (task.cancelled) return
+      this.emitState(task, "failed")
+      task.emit({ type: "error", message: safeError(error) })
+    }
+  }
+
   private async confirmAndExecute(
     task: TaskRecord,
     plan: OperationPlan,
     execute: () => Promise<OperationResult>,
+    options: { forceApproval?: boolean } = {},
   ): Promise<OperationResult> {
-    this.emitState(task, "awaiting_confirmation")
-    const decision = await this.approvalBroker.waitForDecision(plan, (request) => {
-      task.emit({ type: "approval-request", request: sanitizeApprovalRequest(request) })
-    })
+    if (this.dependencies.skipUserConfirmation) {
+      return this.executeTrustedOperation(task, plan, execute)
+    }
+    const trustUsed = Boolean(
+      !options.forceApproval &&
+      plan.terminalPlan &&
+      this.terminalTrustManager.consumeIfAllowed(plan.terminalPlan, task.sourceWindowId),
+    )
+    this.emitState(task, trustUsed ? "executing" : "awaiting_confirmation")
+    const decision = trustUsed
+      ? { decision: "approve" as const, remember: false }
+      : await this.approvalBroker.waitForDecision(plan, (request) => {
+          task.emit({ type: "approval-request", request: sanitizeApprovalRequest(request) })
+        })
     if (decision.decision !== "approve") {
       const status =
         decision.decision === "expired"
@@ -567,7 +685,10 @@ export class TaskManager {
       const result: OperationResult = {
         operationId: plan.operationId,
         status,
-        content: status === "denied" ? "用户拒绝了这项操作。" : "这项操作未获确认，因此没有执行。",
+        content:
+          status === "denied"
+            ? `用户拒绝了这项操作。${decision.reason ? `理由：${decision.reason}` : ""}`
+            : "这项操作未获确认，因此没有执行。",
         detail:
           status === "expired" ? "确认已超时" : status === "cancelled" ? "任务已取消" : "用户拒绝",
         reversible: plan.reversible,
@@ -603,12 +724,18 @@ export class TaskManager {
       return result
     }
     try {
-      this.approvalBroker.consumeApproval(plan, decision.token, {
-        sourceWindowId: task.sourceWindowId,
-        taskId: task.taskId,
-        operationId: plan.operationId,
-      })
-      this.emitState(task, "executing")
+      if (!trustUsed) {
+        this.approvalBroker.consumeApproval(plan, decision.token, {
+          sourceWindowId: task.sourceWindowId,
+          taskId: task.taskId,
+          operationId: plan.operationId,
+        })
+      }
+      if (decision.remember) {
+        if (!plan.terminalPlan) throw new Error("只有 Terminal read-only 意图可以积累信任")
+        this.terminalTrustManager.grant(plan.terminalPlan, task.sourceWindowId)
+      }
+      if (!trustUsed) this.emitState(task, "executing")
       const result = await execute()
       task.emit({ type: "operation-result", result })
       this.dependencies.auditLogger.record({
@@ -694,6 +821,7 @@ export class TaskManager {
     task: TaskRecord,
     capability: Capability,
   ): Promise<CapabilityAccess | null> {
+    if (this.dependencies.skipUserConfirmation) return { trustedWorkspace: true }
     const projectPath = this.dependencies.settingsStore.getAuthorizedProjectPath()
     if (projectPath && capability !== "terminal.execute" && this.isTrustedWorkspace(projectPath)) {
       return { trustedWorkspace: true }
@@ -740,9 +868,27 @@ export class TaskManager {
   }
 
   private requireProjectPath(): string {
-    const projectPath = this.dependencies.settingsStore.getAuthorizedProjectPath()
-    if (!projectPath) throw new Error("尚未选择授权目录")
+    const projectPath = this.getActiveProjectPath()
+    if (!projectPath) throw new Error("当前项目目录不可访问")
     return projectPath
+  }
+
+  private getActiveProjectPath(): string | undefined {
+    const preferencesPath = this.dependencies.settingsStore.getPreferences().defaultLocation.trim()
+    const rememberedPath = this.dependencies.settingsStore.getAuthorizedProjectPath()
+    const usableRememberedPath = rememberedPath === homedir() ? undefined : rememberedPath
+    const candidates = this.dependencies.skipUserConfirmation
+      ? [preferencesPath, usableRememberedPath, process.cwd()]
+      : [rememberedPath, preferencesPath]
+    for (const candidate of candidates) {
+      if (!candidate) continue
+      try {
+        return getRealProjectRoot(candidate)
+      } catch {
+        // Try the next configured location.
+      }
+    }
+    return undefined
   }
 
   private isTrustedWorkspace(projectPath: string): boolean {
@@ -756,6 +902,13 @@ export class TaskManager {
   }
 
   private assertTrustedWorkspaceTargets(targets: string[]): void {
+    if (this.dependencies.skipUserConfirmation) {
+      const root = this.requireProjectPath()
+      if (!targets.every((target) => isWithinRoot(root, target))) {
+        throw new Error("操作目标越过当前项目目录")
+      }
+      return
+    }
     const trusted = this.dependencies.settingsStore.getTrustedWorkspace()
     if (!trusted) throw new Error("持续目录授权已关闭")
     const root = getRealProjectRoot(trusted.path)
@@ -831,7 +984,105 @@ function formatTerminalPlanPreview(plan: ResolvedCommandPlan): string {
 
 function sanitizeApprovalRequest(request: ApprovalRequest): ApprovalRequest {
   const plan = { ...request.plan, preview: request.plan.preview.slice(0, 24_000) }
-  return { ...request, plan }
+  const terminalPlan = plan.terminalPlan
+  if (!terminalPlan) return { ...request, plan }
+  return {
+    ...request,
+    plan,
+    display: {
+      riskBadge: {
+        level: terminalPlan.risk,
+        tier: terminalPlan.sandbox.tier,
+        label: formatTerminalRiskBadge(terminalPlan),
+      },
+      pathPreview: {
+        readRoots: terminalPlan.sandbox.readRoots,
+        writeRoots: terminalPlan.sandbox.writeRoots,
+        protectedPaths: terminalPlan.sandbox.protectedPaths,
+      },
+      fingerprint: { words: readableFingerprint(terminalPlan.planDigest) },
+    },
+  }
+}
+
+function formatTerminalRiskBadge(plan: ResolvedCommandPlan): string {
+  if (plan.sandbox.tier === "read-only" && plan.effects.workspace === "read") {
+    return `${plan.risk} · 只读、无项目代码执行`
+  }
+  if (plan.sandbox.tier === "workspace-write" && plan.effects.projectCodeExecution) {
+    return `${plan.risk} · workspace 可写、执行项目代码`
+  }
+  return `${plan.risk} · ${plan.sandbox.tier}`
+}
+
+function terminalIntentFromLedger(record: {
+  intentKind: string
+  intentAction?: string
+  argv: string[]
+  cwdRelative: string
+}): unknown {
+  const { intentKind, intentAction, argv, cwdRelative } = record
+  if (intentKind === "git.read" && ["status", "diff", "log"].includes(intentAction ?? "")) {
+    return { kind: intentKind, action: intentAction, args: argv.slice(2), cwd: cwdRelative }
+  }
+  if (
+    intentKind === "git.inspect" &&
+    ["show", "blame", "stash list"].includes(intentAction ?? "")
+  ) {
+    const prefixLength = intentAction === "stash list" ? 3 : 2
+    return {
+      kind: intentKind,
+      action: intentAction,
+      args: argv.slice(prefixLength),
+      cwd: cwdRelative,
+    }
+  }
+  if (intentKind === "runtime.info" && ["node", "npm"].includes(intentAction ?? "")) {
+    return { kind: intentKind, action: intentAction, cwd: cwdRelative }
+  }
+  if (intentKind === "pkg.audit" && ["ls", "outdated"].includes(intentAction ?? "")) {
+    return { kind: intentKind, action: intentAction, packageManager: "auto", cwd: cwdRelative }
+  }
+  if (intentKind === "project.script" && argv[0] === "run" && typeof argv[1] === "string") {
+    return {
+      kind: intentKind,
+      packageManager: "auto",
+      script: argv[1],
+      forwardedArgs: [],
+      cwd: cwdRelative,
+    }
+  }
+  throw new Error("运行记录中的 Terminal intent 不可安全重建")
+}
+
+const FINGERPRINT_WORDS = [
+  "安静",
+  "绿色",
+  "松鼠",
+  "晴朗",
+  "蓝色",
+  "灯塔",
+  "温柔",
+  "金色",
+  "云朵",
+  "清醒",
+  "紫色",
+  "风铃",
+  "可靠",
+  "银色",
+  "海湾",
+  "明亮",
+]
+
+export function readableFingerprint(digest: string): [string, string, string] {
+  const indexes = [0, 8, 16].map(
+    (offset) => Number.parseInt(digest.slice(offset, offset + 8), 16) % FINGERPRINT_WORDS.length,
+  )
+  return [
+    FINGERPRINT_WORDS[indexes[0] ?? 0] ?? "安静",
+    FINGERPRINT_WORDS[indexes[1] ?? 0] ?? "绿色",
+    FINGERPRINT_WORDS[indexes[2] ?? 0] ?? "松鼠",
+  ]
 }
 
 function safeError(error: unknown): string {

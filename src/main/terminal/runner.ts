@@ -1,9 +1,14 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import type { ResolvedCommandPlan, TerminalPolicyFailure } from "../../shared/types.js"
+import type {
+  OperationProgressEvent,
+  ResolvedCommandPlan,
+  TerminalPolicyFailure,
+} from "../../shared/types.js"
 import { buildIsolatedEnvironment, prepareIsolatedDirectories } from "./isolatedEnvironment.js"
 import { renderSeatbeltProfile } from "./sandboxProfile.js"
 import { probeSeatbelt, SEATBELT_EXECUTABLE, type SandboxProbe } from "./sandboxProbe.js"
+import { foldOutput, getSoftOutputLimit, redactOutput, StreamRedactor } from "./streamRedactor.js"
 
 const MAX_CONCURRENT_PROCESSES = 2
 const KILL_GRACE_MS = 750
@@ -15,11 +20,14 @@ export interface TerminalRunResult {
   timedOut: boolean
   cancelled: boolean
   truncated: boolean
+  hardLimitExceeded: boolean
+  outputBytes: number
   durationMs: number
 }
 
 export interface TerminalRunOptions {
   signal?: AbortSignal
+  onProgress?: (event: OperationProgressEvent) => void
 }
 
 export interface TerminalRunnerDependencies {
@@ -105,9 +113,29 @@ export class TerminalRunner {
       let stderr = ""
       let outputBytes = 0
       let truncated = false
+      let hardLimitExceeded = false
+      let seq = 0
       let timedOut = false
       let cancelled = false
       let settled = false
+      const redactors = {
+        stdout: new StreamRedactor(),
+        stderr: new StreamRedactor(),
+      }
+
+      const emitProgress = (stream: "stdout" | "stderr", content: string): void => {
+        if (!content || !options.onProgress) return
+        options.onProgress({
+          type: "operation-progress",
+          operationId: plan.operationId,
+          taskId: plan.taskId,
+          stream,
+          seq,
+          content,
+          truncatedSoFar: truncated,
+        })
+        seq += 1
+      }
 
       const finish = (
         error?: Error,
@@ -127,10 +155,15 @@ export class TerminalRunner {
         cleanupTempRoot(plan)
         if (error) reject(error)
         else {
+          emitProgress("stdout", redactors.stdout.flush())
+          emitProgress("stderr", redactors.stderr.flush())
           timedOut = timedOut || active?.terminationReason === "timeout"
           cancelled = cancelled || active?.terminationReason === "cancelled"
           truncated = truncated || active?.terminationReason === "output"
-          const content = redactOutput([stdout, stderr].filter(Boolean).join("\n"))
+          const content = foldOutput(
+            redactOutput([stdout, stderr].filter(Boolean).join("\n")),
+            getSoftOutputLimit(plan),
+          )
           resolve({
             content,
             exitCode: code,
@@ -138,6 +171,8 @@ export class TerminalRunner {
             timedOut,
             cancelled,
             truncated,
+            hardLimitExceeded,
+            outputBytes,
             durationMs: Date.now() - startedAt,
           })
         }
@@ -169,7 +204,7 @@ export class TerminalRunner {
       }
 
       const append = (target: "stdout" | "stderr", chunk: Buffer): void => {
-        if (truncated) return
+        if (hardLimitExceeded) return
         const remaining = plan.limits.outputBytes - outputBytes
         if (chunk.byteLength > remaining) {
           const partial = chunk.subarray(0, Math.max(0, remaining)).toString("utf8")
@@ -177,18 +212,17 @@ export class TerminalRunner {
           else stderr += partial
           outputBytes = plan.limits.outputBytes
           truncated = true
-          appendMarker(target)
+          hardLimitExceeded = true
+          emitProgress(target, redactors[target].push(partial))
           terminateFor("output")
           return
         }
         outputBytes += chunk.byteLength
-        if (target === "stdout") stdout += chunk.toString("utf8")
-        else stderr += chunk.toString("utf8")
-      }
-
-      const appendMarker = (target: "stdout" | "stderr") => {
-        if (target === "stdout") stdout += "\n[output truncated]"
-        else stderr += "\n[output truncated]"
+        const value = chunk.toString("utf8")
+        if (target === "stdout") stdout += value
+        else stderr += value
+        emitProgress(target, redactors[target].push(value))
+        if (outputBytes > getSoftOutputLimit(plan)) truncated = true
       }
 
       const timeout = setTimeout(() => terminateFor("timeout"), plan.limits.timeoutMs)
@@ -276,12 +310,4 @@ function failure(
   requiredAction?: TerminalPolicyFailure["requiredAction"],
 ): TerminalPolicyFailure {
   return { code, policy_code: code, message, retryable, requiredAction }
-}
-
-function redactOutput(value: string): string {
-  return value
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
-    .replace(/MODEL_API_KEY\s*=\s*[^\s]+/gi, "MODEL_API_KEY=[redacted]")
-    .replace(/(api[_-]?key|token|secret|password)=([^\s&]+)/gi, "$1=[redacted]")
-    .slice(0, 128_000)
 }

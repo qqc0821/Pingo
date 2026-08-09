@@ -25,6 +25,8 @@ const api: PingoAPI = {
     get: () => ipcRenderer.invoke("project:get"),
     choose: () => ipcRenderer.invoke("project:choose"),
     revoke: () => ipcRenderer.invoke("project:revoke"),
+    openPath: (path, line, column) =>
+      ipcRenderer.invoke("project:open-path", { path, line, column }),
   },
   trustedWorkspace: {
     get: () => ipcRenderer.invoke("trusted-workspace:get"),
@@ -45,24 +47,22 @@ const api: PingoAPI = {
     deny: (taskId) => ipcRenderer.invoke("task:deny", taskId),
     onEvent: (listener) => subscribe("pingo:task-event", listener),
   },
-  conversation: {
-    list: () => ipcRenderer.invoke("conversation:list"),
-    get: (conversationId) => ipcRenderer.invoke("conversation:get", conversationId),
-    create: () => ipcRenderer.invoke("conversation:create"),
-    submit: (request) => ipcRenderer.invoke("conversation:submit", request),
-    clearContext: (request) => ipcRenderer.invoke("conversation:clear-context", request),
-    undoClearContext: (conversationId) =>
-      ipcRenderer.invoke("conversation:undo-clear-context", conversationId),
-    contextPreview: (conversationId) =>
-      ipcRenderer.invoke("conversation:context-preview", conversationId),
-    importLegacy: (messages) => ipcRenderer.invoke("conversation:import-legacy", messages),
-  },
   audit: {
     list: () => ipcRenderer.invoke("audit:list"),
   },
   capabilities: {
     list: () => ipcRenderer.invoke("capabilities:list"),
     revoke: (grantId) => ipcRenderer.invoke("capabilities:revoke", grantId),
+  },
+  terminalTrust: {
+    list: () => ipcRenderer.invoke("terminal-trust:list"),
+    revokeAll: () => ipcRenderer.invoke("terminal-trust:revoke-all"),
+  },
+  terminalRuns: {
+    list: (query, limit) => ipcRenderer.invoke("terminal-runs:list", { query, limit }),
+    rerun: (runId) => ipcRenderer.invoke("terminal-runs:rerun", runId),
+    diff: (leftRunId, rightRunId) =>
+      ipcRenderer.invoke("terminal-runs:diff", { leftRunId, rightRunId }),
   },
 }
 

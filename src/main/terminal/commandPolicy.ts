@@ -1,6 +1,7 @@
 import { basename } from "node:path"
 import type { CommandPlan, TerminalIntent } from "../../shared/types.js"
 import { resolveProjectPath } from "../security/pathGuard.js"
+import { getIntentPackDefinition } from "./intentPacks.js"
 
 const MAX_ARGS = 32
 const MAX_ARG_LENGTH = 1_000
@@ -76,6 +77,10 @@ export function parseTerminalIntent(value: unknown): TerminalIntent {
     throw new Error("TerminalIntent 必须是结构化对象")
   }
   const candidate = value as Record<string, unknown>
+  if (typeof candidate.kind !== "string") throw new Error("TerminalIntent kind 无效")
+  if (!getIntentPackDefinition(candidate.kind)) {
+    throw new Error("TerminalIntent 未声明或当前灰度开关已关闭")
+  }
   if (candidate.kind === "git.read") {
     assertExactKeys(candidate, ["kind", "action", "args", "cwd"])
     if (
@@ -94,7 +99,9 @@ export function parseTerminalIntent(value: unknown): TerminalIntent {
   }
   if (candidate.kind === "project.script") {
     assertExactKeys(candidate, ["kind", "packageManager", "script", "forwardedArgs", "cwd"])
-    if (candidate.packageManager !== "npm") throw new Error("只开放 npm 项目质量脚本")
+    if (candidate.packageManager !== "npm" && candidate.packageManager !== "auto") {
+      throw new Error("只开放 npm 或 auto 项目质量脚本")
+    }
     if (typeof candidate.script !== "string" || !QUALITY_SCRIPTS.has(candidate.script)) {
       throw new Error("只开放 lint、typecheck、format:check、test、build 质量脚本")
     }
@@ -104,11 +111,56 @@ export function parseTerminalIntent(value: unknown): TerminalIntent {
     }
     return {
       kind: "project.script",
-      packageManager: "npm",
+      packageManager: candidate.packageManager,
       script: candidate.script as "lint" | "typecheck" | "format:check" | "test" | "build",
       forwardedArgs,
       cwd: parseRelativeCwd(candidate.cwd),
     }
+  }
+  if (candidate.kind === "git.inspect") {
+    assertExactKeys(candidate, ["kind", "action", "args", "cwd"])
+    if (
+      candidate.action !== "show" &&
+      candidate.action !== "blame" &&
+      candidate.action !== "stash list"
+    ) {
+      throw new Error("git.inspect 只开放 show、blame、stash list")
+    }
+    const args = parseArgs(candidate.args)
+    validateGitInspectArgs(candidate.action, args)
+    return {
+      kind: "git.inspect",
+      action: candidate.action,
+      args,
+      cwd: parseRelativeCwd(candidate.cwd),
+    }
+  }
+  if (candidate.kind === "runtime.info") {
+    assertExactKeys(candidate, ["kind", "action", "cwd"])
+    if (candidate.action !== "node" && candidate.action !== "npm") {
+      throw new Error("runtime.info 只开放 node 或 npm 版本查询")
+    }
+    return { kind: "runtime.info", action: candidate.action, cwd: parseRelativeCwd(candidate.cwd) }
+  }
+  if (candidate.kind === "pkg.audit") {
+    assertExactKeys(candidate, ["kind", "action", "packageManager", "cwd"])
+    if (candidate.packageManager !== "auto") throw new Error("pkg.audit 必须使用 auto 包管理器探测")
+    if (candidate.action !== "ls" && candidate.action !== "outdated") {
+      throw new Error("pkg.audit 只开放 ls 或 outdated")
+    }
+    return {
+      kind: "pkg.audit",
+      action: candidate.action,
+      packageManager: "auto",
+      cwd: parseRelativeCwd(candidate.cwd),
+    }
+  }
+  if (candidate.kind === "directory.list") {
+    assertExactKeys(candidate, ["kind", "action", "cwd"])
+    if (candidate.action !== "list") {
+      throw new Error("directory.list 只开放 list")
+    }
+    return { kind: "directory.list", action: "list", cwd: parseRelativeCwd(candidate.cwd) }
   }
   throw new Error("不支持的 TerminalIntent")
 }
@@ -116,7 +168,7 @@ export function parseTerminalIntent(value: unknown): TerminalIntent {
 export function isForbiddenCommand(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return true
   const candidate = value as Record<string, unknown>
-  if (candidate.kind === "git.read" || candidate.kind === "project.script") {
+  if (typeof candidate.kind === "string") {
     try {
       parseTerminalIntent(value)
       return false
@@ -185,6 +237,35 @@ export function validateGitReadArgs(action: "status" | "diff" | "log", args: str
     validateGitRelativePath(arg)
   }
   if (expectsValue) throw new Error("Git 数量参数缺少值")
+}
+
+function validateGitInspectArgs(action: "show" | "blame" | "stash list", args: string[]): void {
+  const definition = getIntentPackDefinition("git.inspect")
+  const grammar = definition?.actions[action]
+  if (!grammar) throw new Error("git.inspect action 未声明")
+  let afterPathSeparator = false
+  for (const arg of args) {
+    if (SHELL_SYNTAX.test(arg) || arg.includes("\u0000")) throw new Error("Git 参数包含不安全语法")
+    if (arg === "--") {
+      afterPathSeparator = true
+      continue
+    }
+    if (arg.startsWith("-")) {
+      const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg
+      if (!grammar.allowedFlags.includes(arg) && !grammar.allowedFlags.includes(flag)) {
+        throw new Error("git.inspect 参数不在安全 grammar 中")
+      }
+      continue
+    }
+    if (action === "stash list") throw new Error("stash list 不接受位置参数")
+    if (!afterPathSeparator && action === "blame") {
+      if (!/^(?:HEAD|[0-9a-f]{7,64})$/.test(arg)) throw new Error("Git 路径参数必须位于 -- 之后")
+    } else if (afterPathSeparator) {
+      validateGitRelativePath(arg)
+    } else if (action === "show" && !/^(?:HEAD|[0-9a-f]{7,64}|HEAD~\d{1,4})$/.test(arg)) {
+      throw new Error("git show 只接受安全的 revision")
+    }
+  }
 }
 
 function validateLegacySubcommand(commandName: string, args: string[]): void {

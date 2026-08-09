@@ -9,12 +9,18 @@ import type {
 import { getRealProjectRoot, resolveProjectPath } from "../security/pathGuard.js"
 import { parseTerminalIntent, validateGitReadArgs } from "./commandPolicy.js"
 import { readBoundExecutableIdentity, resolveExecutableIdentity } from "./executableIdentity.js"
-import { resolveProjectScript, verifyProjectScriptBinding } from "./projectScript.js"
+import {
+  detectPackageManager,
+  resolveProjectScript,
+  verifyProjectScriptBinding,
+} from "./projectScript.js"
 import { createSandboxSpec } from "./sandboxProfile.js"
+import { getTerminalPolicyDescriptor } from "./policyCatalog.js"
 
 const TERMINAL_TTL_MS = 60_000
 const TERMINAL_TIMEOUT_MS = 30_000
-const TERMINAL_OUTPUT_BYTES = 128_000
+const TERMINAL_SOFT_OUTPUT_BYTES = 128_000
+const TERMINAL_OUTPUT_BYTES = 8 * 1024 * 1024
 
 export class TerminalPolicyError extends Error {
   constructor(
@@ -67,15 +73,13 @@ export function compileTerminalIntent(
       limits: {
         timeoutMs: TERMINAL_TIMEOUT_MS,
         outputBytes: TERMINAL_OUTPUT_BYTES,
+        softOutputBytes: TERMINAL_SOFT_OUTPUT_BYTES,
       },
       createdAt: now,
       expiresAt,
     } as const
 
-    const resolved =
-      intent.kind === "git.read"
-        ? compileGitRead(projectRoot, intent, base)
-        : compileProjectScript(projectRoot, intent, base)
+    const resolved = compileIntent(projectRoot, intent, base)
     const planDigest = createPlanDigest({ ...resolved, planDigest: undefined })
     return freezePlan({ ...resolved, planDigest })
   } catch (error) {
@@ -151,7 +155,13 @@ export function terminalFailure(
   retryable: boolean,
   requiredAction?: TerminalPolicyFailure["requiredAction"],
 ): TerminalPolicyFailure {
-  return { code, policy_code: code, message: message.slice(0, 240), retryable, requiredAction }
+  return {
+    code,
+    policy_code: code,
+    message: message.slice(0, 240),
+    retryable,
+    requiredAction: requiredAction ?? getTerminalPolicyDescriptor(code).requiredAction,
+  }
 }
 
 function compileGitRead(
@@ -193,6 +203,37 @@ function compileGitRead(
   }
 }
 
+function compileIntent(
+  projectRoot: string,
+  intent: TerminalIntent,
+  base: Omit<
+    ResolvedCommandPlan,
+    | "executable"
+    | "argv"
+    | "projectScript"
+    | "effects"
+    | "sandbox"
+    | "risk"
+    | "reason"
+    | "planDigest"
+  >,
+): Omit<ResolvedCommandPlan, "planDigest"> {
+  switch (intent.kind) {
+    case "git.read":
+      return compileGitRead(projectRoot, intent, base)
+    case "project.script":
+      return compileProjectScript(projectRoot, intent, base)
+    case "git.inspect":
+      return compileGitInspect(projectRoot, intent, base)
+    case "runtime.info":
+      return compileRuntimeInfo(projectRoot, intent, base)
+    case "pkg.audit":
+      return compilePackageAudit(projectRoot, intent, base)
+    case "directory.list":
+      return compileDirectoryList(projectRoot, intent, base)
+  }
+}
+
 function compileProjectScript(
   projectRoot: string,
   intent: Extract<TerminalIntent, { kind: "project.script" }>,
@@ -214,7 +255,7 @@ function compileProjectScript(
   } catch (error) {
     throw policyError("command_forbidden", safeMessage(error), false, "change_approach", error)
   }
-  const executable = resolveExecutableIdentity("npm")
+  const executable = resolveExecutableIdentity(resolvedScript.packageManager)
   const effects = {
     workspace: "write" as const,
     projectCodeExecution: true,
@@ -233,6 +274,150 @@ function compileProjectScript(
     risk: "R3",
     reason: `将执行 package.json 中的 ${intent.script} 质量脚本；可写 workspace 和 operation 临时目录，网络关闭`,
   }
+}
+
+function compileGitInspect(
+  projectRoot: string,
+  intent: Extract<TerminalIntent, { kind: "git.inspect" }>,
+  base: Omit<
+    ResolvedCommandPlan,
+    | "executable"
+    | "argv"
+    | "projectScript"
+    | "effects"
+    | "sandbox"
+    | "risk"
+    | "reason"
+    | "planDigest"
+  >,
+): Omit<ResolvedCommandPlan, "planDigest"> {
+  const executable = resolveExecutableIdentity("git")
+  const effects = readOnlyEffects()
+  const argv =
+    intent.action === "stash list"
+      ? ["--no-pager", "stash", "list", ...intent.args]
+      : ["--no-pager", intent.action, ...intent.args]
+  const sandbox = createSandboxSpec(projectRoot, base.operationId, executable, effects, "read-only")
+  return {
+    ...base,
+    executable,
+    argv,
+    effects,
+    sandbox,
+    risk: "R1",
+    reason: "只读 Git inspect 查询；workspace 只读、网络关闭、目录外访问禁止",
+  }
+}
+
+function compileRuntimeInfo(
+  projectRoot: string,
+  intent: Extract<TerminalIntent, { kind: "runtime.info" }>,
+  base: Omit<
+    ResolvedCommandPlan,
+    | "executable"
+    | "argv"
+    | "projectScript"
+    | "effects"
+    | "sandbox"
+    | "risk"
+    | "reason"
+    | "planDigest"
+  >,
+): Omit<ResolvedCommandPlan, "planDigest"> {
+  const executable = resolveExecutableIdentity(intent.action === "node" ? "node" : "npm")
+  const effects = readOnlyEffects()
+  const sandbox = createSandboxSpec(projectRoot, base.operationId, executable, effects, "read-only")
+  return {
+    ...base,
+    executable,
+    argv: ["--version"],
+    effects,
+    sandbox,
+    risk: "R1",
+    reason: "只读运行时版本查询；workspace 只读、网络关闭、目录外访问禁止",
+  }
+}
+
+function compilePackageAudit(
+  projectRoot: string,
+  intent: Extract<TerminalIntent, { kind: "pkg.audit" }>,
+  base: Omit<
+    ResolvedCommandPlan,
+    | "executable"
+    | "argv"
+    | "projectScript"
+    | "effects"
+    | "sandbox"
+    | "risk"
+    | "reason"
+    | "planDigest"
+  >,
+): Omit<ResolvedCommandPlan, "planDigest"> {
+  const packageManager = detectPackageManager(projectRoot)
+  const executable = resolveExecutableIdentity(packageManager)
+  const effects = readOnlyEffects()
+  const argv = packageAuditArgv(packageManager, intent.action)
+  const sandbox = createSandboxSpec(projectRoot, base.operationId, executable, effects, "read-only")
+  return {
+    ...base,
+    executable,
+    argv,
+    effects,
+    sandbox,
+    risk: "R1",
+    reason: "只读本地依赖审计；网络关闭、workspace 只读、目录外访问禁止",
+  }
+}
+
+function compileDirectoryList(
+  projectRoot: string,
+  _intent: Extract<TerminalIntent, { kind: "directory.list" }>,
+  base: Omit<
+    ResolvedCommandPlan,
+    | "executable"
+    | "argv"
+    | "projectScript"
+    | "effects"
+    | "sandbox"
+    | "risk"
+    | "reason"
+    | "planDigest"
+  >,
+): Omit<ResolvedCommandPlan, "planDigest"> {
+  const executable = resolveExecutableIdentity("ls")
+  const effects = readOnlyEffects()
+  const sandbox = createSandboxSpec(projectRoot, base.operationId, executable, effects, "read-only")
+  return {
+    ...base,
+    executable,
+    argv: ["-1"],
+    effects,
+    sandbox,
+    risk: "R1",
+    reason: "只读目录列表；workspace 只读、网络关闭、目录外访问禁止",
+  }
+}
+
+function readOnlyEffects() {
+  return {
+    workspace: "read" as const,
+    projectCodeExecution: false,
+    network: "none" as const,
+    externalPaths: [],
+  }
+}
+
+function packageAuditArgv(
+  packageManager: "npm" | "pnpm" | "yarn" | "bun",
+  action: "ls" | "outdated",
+): string[] {
+  if (packageManager === "npm")
+    return action === "ls" ? ["ls", "--depth=0", "--offline"] : ["outdated", "--offline"]
+  if (packageManager === "pnpm")
+    return action === "ls" ? ["list", "--depth", "0", "--offline"] : ["outdated", "--offline"]
+  if (packageManager === "yarn")
+    return action === "ls" ? ["list", "--depth=0", "--offline"] : ["outdated", "--offline"]
+  return action === "ls" ? ["pm", "ls"] : ["pm", "ls", "--all"]
 }
 
 function sameSandboxSpec(a: TerminalSandboxSpec, b: TerminalSandboxSpec): boolean {

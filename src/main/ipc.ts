@@ -1,15 +1,9 @@
-import { app, ipcMain, Menu } from "electron"
+import { app, ipcMain, Menu, shell } from "electron"
 import { dialog } from "electron"
 import type { OpenDialogOptions } from "electron"
 import { realpathSync, statSync } from "node:fs"
-import { basename, join } from "node:path"
-import type {
-  AppSettings,
-  ClearContextRequest,
-  ConversationSubmitRequest,
-  TrustedWorkspace,
-  UserPreferences,
-} from "../shared/types.js"
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path"
+import type { AppSettings, TrustedWorkspace, UserPreferences } from "../shared/types.js"
 import type {
   Capability,
   CapabilityRequest,
@@ -18,7 +12,8 @@ import type {
 } from "../shared/types.js"
 import type { SettingsStore } from "./store.js"
 import { AuditLogger } from "./security/auditLogger.js"
-import { ConversationStore } from "./conversations/conversationStore.js"
+import { TerminalRunStore } from "./terminal/runStore.js"
+import { getRealProjectRoot, isSensitiveRelativePath } from "./security/pathGuard.js"
 import { TaskManager } from "./tasks/taskManager.js"
 import {
   beginDrag,
@@ -31,10 +26,12 @@ import {
 
 export function registerIpcHandlers(settingsStore: SettingsStore): void {
   const auditLogger = new AuditLogger(join(app.getPath("userData"), "operation-history.jsonl"))
-  const conversationStore = new ConversationStore(join(app.getPath("userData"), "conversations"))
+  const terminalRunStore = new TerminalRunStore()
   const taskManager = new TaskManager({
     settingsStore,
     auditLogger,
+    terminalRunStore,
+    skipUserConfirmation: true,
   })
 
   app.on("browser-window-created", (_event, window) => {
@@ -43,7 +40,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     })
   })
 
-  app.once("will-quit", () => conversationStore.close())
+  app.once("will-quit", () => terminalRunStore.close())
 
   ipcMain.handle("pet:set-expanded", (event, value: unknown) => {
     assertTrustedSender(event.sender)
@@ -84,7 +81,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
 
   ipcMain.handle("project:choose", async (event) => {
     assertTrustedSender(event.sender)
-    const realSelectedPath = await chooseDirectory("选择要授权给 Pingo 的项目目录")
+    const realSelectedPath = await chooseDirectory(settingsStore, "选择 Pingo 项目目录")
     if (!realSelectedPath) return null
     taskManager.revokeAllCapabilities()
     settingsStore.clearTrustedWorkspace()
@@ -99,6 +96,29 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     settingsStore.clearAuthorizedProjectPath()
   })
 
+  ipcMain.handle("project:open-path", async (event, value: unknown): Promise<boolean> => {
+    assertTrustedSender(event.sender)
+    const request = parseOpenPathRequest(value)
+    const projectPath = settingsStore.getAuthorizedProjectPath()
+    if (!projectPath) throw new Error("当前项目目录不可用")
+    const root = getRealProjectRoot(projectPath)
+    const candidate = isAbsolute(request.path) ? request.path : resolve(root, request.path)
+    const target = realpathSync.native(candidate)
+    const targetRelative = relative(root, target)
+    if (
+      targetRelative === ".." ||
+      targetRelative.startsWith(`..${sep}`) ||
+      isAbsolute(targetRelative) ||
+      isSensitiveRelativePath(targetRelative) ||
+      !statSync(target).isFile()
+    ) {
+      throw new Error("日志路径不在当前项目的普通文件范围内")
+    }
+    const error = await shell.openPath(target)
+    if (error) throw new Error(error)
+    return true
+  })
+
   ipcMain.handle("trusted-workspace:get", (event): TrustedWorkspace | null => {
     assertTrustedSender(event.sender)
     return getTrustedWorkspaceInfo(settingsStore)
@@ -106,7 +126,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
 
   ipcMain.handle("trusted-workspace:choose", async (event): Promise<TrustedWorkspace | null> => {
     assertTrustedSender(event.sender)
-    const selectedPath = await chooseDirectory("选择要持续授权给 Pingo 的目录")
+    const selectedPath = await chooseDirectory(settingsStore, "选择 Pingo 项目目录")
     if (!selectedPath) return null
     taskManager.revokeAllCapabilities()
     settingsStore.setTrustedWorkspace(selectedPath)
@@ -178,60 +198,6 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     return { taskId }
   })
 
-  ipcMain.handle("conversation:list", (event) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.list()
-  })
-
-  ipcMain.handle("conversation:get", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.get(parseConversationId(value))
-  })
-
-  ipcMain.handle("conversation:create", (event) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.create()
-  })
-
-  ipcMain.handle("conversation:submit", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    const request = parseConversationSubmitRequest(value)
-    const response = conversationStore.submit(request)
-    if (!response.started) return response
-    const sender = event.sender
-    const messages = conversationStore.getContextForRun(response.taskId)
-    taskManager.submit(
-      String(sender.id),
-      messages,
-      (taskEvent) => {
-        conversationStore.recordTaskEvent(response.taskId, taskEvent)
-        if (!sender.isDestroyed()) sender.send("pingo:task-event", taskEvent)
-      },
-      { taskId: response.taskId },
-    )
-    return response
-  })
-
-  ipcMain.handle("conversation:clear-context", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.clearContext(parseClearContextRequest(value))
-  })
-
-  ipcMain.handle("conversation:undo-clear-context", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.undoClearContext(parseConversationId(value))
-  })
-
-  ipcMain.handle("conversation:context-preview", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.contextPreview(parseConversationId(value))
-  })
-
-  ipcMain.handle("conversation:import-legacy", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.importLegacy(parseLegacyMessages(value))
-  })
-
   ipcMain.on("task:cancel", (event, value: unknown) => {
     if (!isTrustedSender(event.sender) || typeof value !== "string" || value.length > 120) return
     taskManager.cancel(value, String(event.sender.id))
@@ -256,15 +222,15 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     const configuredProject = settingsStore.getAuthorizedProjectPath()
     let selectedPath = configuredProject
     if (!selectedPath) {
+      const defaultPath = getSuggestedProjectPath(settingsStore)
+      const options: OpenDialogOptions = {
+        title: "选择要授权给 Pingo 的项目目录",
+        properties: ["openDirectory", "createDirectory"],
+        ...(defaultPath ? { defaultPath } : {}),
+      }
       const result = owner
-        ? await dialog.showOpenDialog(owner, {
-            title: "选择要授权给 Pingo 的目录",
-            properties: ["openDirectory", "createDirectory"],
-          })
-        : await dialog.showOpenDialog({
-            title: "选择要授权给 Pingo 的目录",
-            properties: ["openDirectory", "createDirectory"],
-          })
+        ? await dialog.showOpenDialog(owner, options)
+        : await dialog.showOpenDialog(options)
       if (result.canceled || !result.filePaths.at(0)) {
         taskManager.denyCapability(String(event.sender.id), request.taskId)
         return null
@@ -301,16 +267,61 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     return taskManager.revokeCapability(value)
   })
 
+  ipcMain.handle("terminal-trust:list", (event) => {
+    assertTrustedSender(event.sender)
+    return taskManager.listTerminalTrust()
+  })
+
+  ipcMain.handle("terminal-trust:revoke-all", (event) => {
+    assertTrustedSender(event.sender)
+    taskManager.revokeAllTerminalTrust()
+  })
+
+  ipcMain.handle("terminal-runs:list", (event, value: unknown) => {
+    assertTrustedSender(event.sender)
+    const query = parseTerminalRunQuery(value)
+    return terminalRunStore.searchTerminalRuns(query.query, query.limit)
+  })
+
+  ipcMain.handle("terminal-runs:rerun", (event, value: unknown) => {
+    assertTrustedSender(event.sender)
+    if (typeof value !== "string" || value.length > 120) throw new TypeError("运行记录 ID 无效")
+    const sender = event.sender
+    return taskManager.rerunTerminalRun(String(sender.id), value, (taskEvent) => {
+      if (!sender.isDestroyed()) sender.send("pingo:task-event", taskEvent)
+    })
+  })
+
+  ipcMain.handle("terminal-runs:diff", (event, value: unknown) => {
+    assertTrustedSender(event.sender)
+    if (typeof value !== "object" || value === null) throw new TypeError("运行对比参数无效")
+    const candidate = value as { leftRunId?: unknown; rightRunId?: unknown }
+    if (
+      typeof candidate.leftRunId !== "string" ||
+      candidate.leftRunId.length > 120 ||
+      typeof candidate.rightRunId !== "string" ||
+      candidate.rightRunId.length > 120
+    ) {
+      throw new TypeError("运行对比参数无效")
+    }
+    return terminalRunStore.diffTerminalRuns(candidate.leftRunId, candidate.rightRunId)
+  })
+
   ipcMain.handle("audit:list", (event) => {
     assertTrustedSender(event.sender)
     return taskManager.getAuditHistory()
   })
 }
 
-async function chooseDirectory(title: string): Promise<string | null> {
+async function chooseDirectory(
+  settingsStore: SettingsStore,
+  title: string,
+): Promise<string | null> {
+  const defaultPath = getSuggestedProjectPath(settingsStore)
   const options: OpenDialogOptions = {
     title,
     properties: ["openDirectory", "createDirectory"],
+    ...(defaultPath ? { defaultPath } : {}),
   }
   const owner = getPetWindow()
   const result = owner
@@ -342,66 +353,45 @@ function parseMessages(value: unknown): ChatMessageInput[] | null {
   return value
 }
 
-function parseConversationId(value: unknown): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 120)
-    throw new TypeError("conversationId 无效")
-  return value
-}
-
-function parseConversationSubmitRequest(value: unknown): ConversationSubmitRequest {
-  if (typeof value !== "object" || value === null) throw new TypeError("会话提交参数无效")
-  const request = value as Partial<ConversationSubmitRequest>
+function parseOpenPathRequest(value: unknown): { path: string; line?: number; column?: number } {
+  if (typeof value !== "object" || value === null) throw new TypeError("打开路径参数无效")
+  const candidate = value as { path?: unknown; line?: unknown; column?: unknown }
   if (
-    typeof request.clientRequestId !== "string" ||
-    request.clientRequestId.length === 0 ||
-    request.clientRequestId.length > 120 ||
-    !Number.isSafeInteger(request.expectedRevision) ||
-    typeof request.expectedContextEpochId !== "string" ||
-    request.expectedContextEpochId.length === 0 ||
-    request.expectedContextEpochId.length > 120 ||
-    typeof request.content !== "string" ||
-    request.content.trim().length === 0 ||
-    request.content.length > 20_000
+    typeof candidate.path !== "string" ||
+    !candidate.path.trim() ||
+    candidate.path.length > 4_096 ||
+    (candidate.line !== undefined &&
+      (!Number.isSafeInteger(candidate.line) || (candidate.line as number) < 1)) ||
+    (candidate.column !== undefined &&
+      (!Number.isSafeInteger(candidate.column) || (candidate.column as number) < 1))
   ) {
-    throw new TypeError("会话提交参数无效")
+    throw new TypeError("打开路径参数无效")
   }
   return {
-    conversationId: parseConversationId(request.conversationId),
-    clientRequestId: request.clientRequestId,
-    expectedRevision: request.expectedRevision as number,
-    expectedContextEpochId: request.expectedContextEpochId,
-    content: request.content.trim(),
+    path: candidate.path.trim(),
+    ...(candidate.line === undefined ? {} : { line: candidate.line as number }),
+    ...(candidate.column === undefined ? {} : { column: candidate.column as number }),
   }
 }
 
-function parseClearContextRequest(value: unknown): ClearContextRequest {
-  if (typeof value !== "object" || value === null) throw new TypeError("清空上下文参数无效")
-  const request = value as Partial<ClearContextRequest>
-  if (!Number.isSafeInteger(request.expectedRevision)) throw new TypeError("清空上下文参数无效")
-  return {
-    conversationId: parseConversationId(request.conversationId),
-    expectedRevision: request.expectedRevision as number,
-  }
-}
-
-function parseLegacyMessages(
-  value: unknown,
-): Array<{ id: string; role: "user" | "assistant" | "error"; content: string }> {
-  if (!Array.isArray(value) || value.length > 200) throw new TypeError("旧聊天记录无效")
+function parseTerminalRunQuery(value: unknown): { query: string; limit: number } {
+  if (value === undefined || value === null) return { query: "", limit: 50 }
+  if (typeof value !== "object") throw new TypeError("运行查询参数无效")
+  const candidate = value as { query?: unknown; limit?: unknown }
   if (
-    !value.every(
-      (message) =>
-        typeof message === "object" &&
-        message !== null &&
-        typeof (message as { id?: unknown }).id === "string" &&
-        ["user", "assistant", "error"].includes((message as { role?: unknown }).role as string) &&
-        typeof (message as { content?: unknown }).content === "string" &&
-        (message as { content: string }).content.length <= 20_000,
-    )
+    (candidate.query !== undefined &&
+      (typeof candidate.query !== "string" || candidate.query.length > 200)) ||
+    (candidate.limit !== undefined &&
+      (!Number.isSafeInteger(candidate.limit) ||
+        (candidate.limit as number) < 1 ||
+        (candidate.limit as number) > 100))
   ) {
-    throw new TypeError("旧聊天记录无效")
+    throw new TypeError("运行查询参数无效")
   }
-  return value as Array<{ id: string; role: "user" | "assistant" | "error"; content: string }>
+  return {
+    query: typeof candidate.query === "string" ? candidate.query : "",
+    limit: typeof candidate.limit === "number" ? candidate.limit : 50,
+  }
 }
 
 function isChatMessageInput(value: unknown): value is ChatMessageInput {
@@ -446,14 +436,17 @@ function parseOperationDecision(value: unknown): OperationDecision {
     candidate.taskId.length > 120 ||
     typeof candidate.operationId !== "string" ||
     candidate.operationId.length > 120 ||
-    (candidate.decision !== "approve" && candidate.decision !== "deny")
+    !["approve", "deny", "trust"].includes(candidate.decision as string) ||
+    (candidate.reason !== undefined &&
+      (typeof candidate.reason !== "string" || candidate.reason.length > 240))
   ) {
     throw new TypeError("operation decision 参数无效")
   }
   return {
     taskId: candidate.taskId,
     operationId: candidate.operationId,
-    decision: candidate.decision,
+    decision: candidate.decision as OperationDecision["decision"],
+    ...(candidate.reason === undefined ? {} : { reason: candidate.reason.trim() }),
   }
 }
 
@@ -479,6 +472,23 @@ function getProjectInfo(projectPath: string | undefined) {
     return { path: realPath, name: basename(realPath) }
   } catch {
     return null
+  }
+}
+
+function getSuggestedProjectPath(settingsStore: SettingsStore): string | undefined {
+  return [
+    settingsStore.getTrustedWorkspace()?.path,
+    settingsStore.getAuthorizedProjectPath(),
+    app.isPackaged ? undefined : process.cwd(),
+  ].find(isExistingDirectory)
+}
+
+function isExistingDirectory(value: string | undefined): value is string {
+  if (!value || !isAbsolute(value)) return false
+  try {
+    return statSync(value).isDirectory()
+  } catch {
+    return false
   }
 }
 

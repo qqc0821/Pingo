@@ -17,6 +17,8 @@ interface PendingApproval {
 export interface BrokerDecision {
   decision: "approve" | "deny" | "expired" | "cancelled"
   token?: string
+  remember?: boolean
+  reason?: string
 }
 
 export interface ApprovalValidation {
@@ -82,7 +84,7 @@ export class ApprovalBroker {
         this.deniedDigests.set(plan.taskId, denied)
       }
       denied.add(digest)
-      pending.resolve({ decision: "deny" })
+      pending.resolve({ decision: "deny", reason: decision.reason })
       return true
     }
     const token = randomUUID()
@@ -94,7 +96,7 @@ export class ApprovalBroker {
       windowId: plan.sourceWindowId,
       expiresAt: plan.expiresAt,
     })
-    pending.resolve({ decision: "approve", token })
+    pending.resolve({ decision: "approve", token, remember: decision.decision === "trust" })
     return true
   }
 

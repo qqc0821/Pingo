@@ -1,6 +1,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
 import {
+  consumeScanEntry,
+  createScanBudget,
+  DEFAULT_SCAN_EXCLUDED_DIRECTORIES,
   getRealProjectRoot,
   isBinaryBuffer,
   isSensitiveRelativePath,
@@ -21,37 +24,66 @@ export function searchFiles(projectPath: string, args: unknown): string {
   if (!statSync(startPath).isDirectory()) throw new Error("search_files.directory 必须是目录")
 
   const results: string[] = []
-  walk(startPath, root, parsed.query.toLowerCase(), results)
-  if (results.length === 0) return `没有找到与“${parsed.query}”匹配的文件或文本。`
+  const budget = createScanBudget()
+  walk(startPath, root, parsed.query.toLowerCase(), results, budget)
+  if (results.length === 0) {
+    return budget.truncated
+      ? `没有找到与“${parsed.query}”匹配的文件或文本；扫描已达到安全条目预算，结果可能不完整。`
+      : `没有找到与“${parsed.query}”匹配的文件或文本。`
+  }
   const suffix =
-    results.length >= MAX_SEARCH_RESULTS ? `\n（结果已限制为 ${MAX_SEARCH_RESULTS} 项）` : ""
+    results.length >= MAX_SEARCH_RESULTS
+      ? `\n（结果已限制为 ${MAX_SEARCH_RESULTS} 项）`
+      : budget.truncated
+        ? "\n（扫描已达到安全条目预算，结果可能不完整）"
+        : ""
   return `${results.join("\n")}${suffix}`
 }
 
-function walk(directory: string, root: string, query: string, results: string[]): void {
+function walk(
+  directory: string,
+  root: string,
+  query: string,
+  results: string[],
+  budget: ReturnType<typeof createScanBudget>,
+): void {
   if (results.length >= MAX_SEARCH_RESULTS) return
 
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+  let entries: import("node:fs").Dirent[]
+  try {
+    entries = readdirSync(directory, { withFileTypes: true })
+  } catch {
+    return
+  }
+
+  for (const entry of entries) {
     if (results.length >= MAX_SEARCH_RESULTS) return
+    if (!consumeScanEntry(budget)) return
     const absolutePath = join(directory, entry.name)
     const relativePath = relative(root, absolutePath)
     if (isSensitiveRelativePath(relativePath) || entry.isSymbolicLink()) continue
 
     if (entry.isDirectory()) {
-      walk(absolutePath, root, query, results)
+      if (DEFAULT_SCAN_EXCLUDED_DIRECTORIES.has(entry.name)) continue
+      walk(absolutePath, root, query, results, budget)
       continue
     }
     if (!entry.isFile()) continue
+    if (entry.name === ".DS_Store") continue
     if (relativePath.toLowerCase().includes(query)) {
       results.push(`${relativePath}（文件名匹配）`)
       continue
     }
 
-    const stats = statSync(absolutePath)
-    if (stats.size > MAX_FILE_BYTES) continue
-    const buffer = readFileSync(absolutePath)
-    if (!isBinaryBuffer(buffer) && buffer.toString("utf8").toLowerCase().includes(query)) {
-      results.push(`${relativePath}（内容匹配）`)
+    try {
+      const stats = statSync(absolutePath)
+      if (stats.size > MAX_FILE_BYTES) continue
+      const buffer = readFileSync(absolutePath)
+      if (!isBinaryBuffer(buffer) && buffer.toString("utf8").toLowerCase().includes(query)) {
+        results.push(`${relativePath}（内容匹配）`)
+      }
+    } catch {
+      // 文件可能无读取权限或在扫描期间被移动；忽略后继续扫描。
     }
   }
 }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ProjectScriptBinding, TerminalIntent } from "../../shared/types.js"
 import { resolveProjectPath } from "../security/pathGuard.js"
@@ -11,13 +11,15 @@ export interface ResolvedProjectScript {
   binding: ProjectScriptBinding
   cwd: string
   packageJsonPath: string
+  packageManager: "npm" | "pnpm" | "yarn" | "bun"
 }
 
 export function resolveProjectScript(
   projectRoot: string,
   intent: Extract<TerminalIntent, { kind: "project.script" }>,
 ): ResolvedProjectScript {
-  if (intent.packageManager !== "npm") throw new Error("只支持 npm 项目脚本")
+  const packageManager =
+    intent.packageManager === "auto" ? detectPackageManager(projectRoot) : intent.packageManager
   if (!QUALITY_SCRIPT_NAMES.includes(intent.script as QualityScriptName)) {
     throw new Error("只开放已知质量脚本")
   }
@@ -53,7 +55,29 @@ export function resolveProjectScript(
     },
     cwd,
     packageJsonPath,
+    packageManager,
   }
+}
+
+export function detectPackageManager(projectRoot: string): "npm" | "pnpm" | "yarn" | "bun" {
+  const lockfiles = [
+    ["package-lock.json", "npm"],
+    ["pnpm-lock.yaml", "pnpm"],
+    ["yarn.lock", "yarn"],
+    ["bun.lockb", "bun"],
+    ["bun.lock", "bun"],
+  ] as const
+  const matches = lockfiles.filter(([name]) => existsSync(join(projectRoot, name)))
+  if (matches.length !== 1) {
+    throw new Error(
+      matches.length === 0
+        ? "未找到唯一 lockfile，无法安全探测包管理器"
+        : "发现多个 lockfile，无法安全探测包管理器",
+    )
+  }
+  const match = matches[0]
+  if (!match) throw new Error("无法探测包管理器")
+  return match[1]
 }
 
 export function verifyProjectScriptBinding(

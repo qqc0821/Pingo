@@ -1,6 +1,74 @@
+$neutral-900: #202123;
+$neutral-700: #343541;
+$neutral-600: #4b5563;
+$neutral-500: #667085;
+$neutral-400: #6b7280;
+$neutral-300: #92959c;
+$neutral-200: #d7d9de;
+$neutral-100: #f2f4f7;
+$white: #fff;
+$blue-600: #4263eb;
+$green-700: #08765a;
+$amber-700: #9d4e00;
+$red-700: #b4233b;
+
 :root {
-  color: #202123;
-  background: transparent;
+  // Primitives
+  --color-neutral-900: #{$neutral-900};
+  --color-neutral-700: #{$neutral-700};
+  --color-neutral-600: #{$neutral-600};
+  --color-neutral-500: #{$neutral-500};
+  --color-neutral-400: #{$neutral-400};
+  --color-neutral-300: #{$neutral-300};
+  --color-neutral-200: #{$neutral-200};
+  --color-neutral-100: #{$neutral-100};
+  --color-white: #{$white};
+  --color-blue-600: #{$blue-600};
+  --color-green-700: #{$green-700};
+  --color-amber-700: #{$amber-700};
+  --color-red-700: #{$red-700};
+
+  // Semantic roles
+  --surface-canvas: transparent;
+  --surface-raised: var(--color-white);
+  --surface-raised-translucent: rgb(255 255 255 / 98%);
+  --surface-subtle: var(--color-neutral-100);
+  --text-primary: var(--color-neutral-900);
+  --text-secondary: var(--color-neutral-600);
+  --text-muted: var(--color-neutral-400);
+  --text-placeholder: var(--color-neutral-400);
+  --border-default: var(--color-neutral-200);
+  --border-subtle: #e5e5e5;
+  --line-subtle: var(--border-subtle);
+  --action-primary: var(--color-neutral-900);
+  --action-primary-hover: #000;
+  --focus-ring: #10a37f;
+  --focus-ring-soft: rgb(16 163 127 / 16%);
+  --shadow-raised: 0 8px 18px rgb(15 23 42 / 12%);
+  --shadow-prompt: 0 16px 34px rgb(15 23 42 / 14%), 0 2px 8px rgb(15 23 42 / 6%);
+  --status-neutral: var(--color-neutral-500);
+  --status-info: var(--color-blue-600);
+  --status-success: var(--color-green-700);
+  --status-warning: var(--color-amber-700);
+  --status-danger: var(--color-red-700);
+  --status-neutral-border: #e1e5eb;
+  --status-neutral-surface: #f8f9fb;
+  --status-neutral-icon: var(--color-neutral-100);
+  --status-info-border: #dce4ff;
+  --status-info-surface: #f7f9ff;
+  --status-info-icon: #eef2ff;
+  --status-success-border: #ccebe2;
+  --status-success-surface: #f4fbf8;
+  --status-success-icon: #e8f7f2;
+  --status-warning-border: #f5dab0;
+  --status-warning-surface: #fff9f0;
+  --status-warning-icon: #fff1da;
+  --status-danger-border: #f4cdd2;
+  --status-danger-surface: #fff7f8;
+  --status-danger-icon: #ffebee;
+
+  color: var(--text-primary);
+  background: var(--surface-canvas);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -17,7 +85,7 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: transparent;
+  background: var(--surface-canvas);
 }
 
 button,
@@ -28,17 +96,359 @@ textarea {
 
 button {
   border: 0;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+::selection {
+  background: var(--focus-ring-soft);
+  color: var(--text-primary);
 }
 
 .app-shell {
   position: relative;
   width: 100%;
   height: 100%;
-  background: transparent;
+  background: var(--surface-canvas);
 }
 
 .app-shell.expanded {
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 8px;
+}
+
+.pet-prompt-layer {
+  min-height: 0;
+  flex: 0 1 auto;
+  z-index: 20;
+}
+
+.app-shell.prompt-detail-open .pet-prompt-layer {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.app-shell.prompt-detail-open .quick-composer {
+  display: none;
+}
+
+.pet-prompt {
+  --prompt-accent: var(--status-neutral);
+  --prompt-border: var(--status-neutral-border);
+  --prompt-icon-surface: var(--status-neutral-icon);
+  --prompt-surface: var(--status-neutral-surface);
+
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 12px 14px 11px 12px;
+  border: 1px solid var(--prompt-border);
+  border-radius: 20px;
+  background: linear-gradient(
+    135deg,
+    var(--prompt-surface) 0%,
+    var(--surface-raised-translucent) 72%
+  );
+  box-shadow: var(--shadow-prompt);
+  animation: prompt-card-enter 180ms ease-out both;
+}
+
+.pet-prompt--progress {
+  --prompt-accent: var(--status-info);
+  --prompt-border: var(--status-info-border);
+  --prompt-icon-surface: var(--status-info-icon);
+  --prompt-surface: var(--status-info-surface);
+}
+
+.pet-prompt--success {
+  --prompt-accent: var(--status-success);
+  --prompt-border: var(--status-success-border);
+  --prompt-icon-surface: var(--status-success-icon);
+  --prompt-surface: var(--status-success-surface);
+}
+
+.pet-prompt--warning {
+  --prompt-accent: var(--status-warning);
+  --prompt-border: var(--status-warning-border);
+  --prompt-icon-surface: var(--status-warning-icon);
+  --prompt-surface: var(--status-warning-surface);
+}
+
+.pet-prompt--error {
+  --prompt-accent: var(--status-danger);
+  --prompt-border: var(--status-danger-border);
+  --prompt-icon-surface: var(--status-danger-icon);
+  --prompt-surface: var(--status-danger-surface);
+}
+
+.pet-prompt-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.pet-prompt-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--prompt-icon-surface);
+  color: var(--prompt-accent);
+}
+
+.prompt-icon-svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.pet-prompt-icon-motion {
+  display: grid;
+  place-items: center;
+}
+
+.pet-prompt--progress .pet-prompt-icon-motion {
+  animation: prompt-icon-turn 1.8s linear infinite;
+}
+
+.pet-prompt-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.pet-prompt-label {
+  flex: 0 0 auto;
+  color: var(--prompt-accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+
+.pet-prompt-heading strong {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pet-prompt-detail {
+  display: none;
+  min-width: 0;
+  margin: 8px 0 0 44px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+  white-space: pre-wrap;
+}
+
+.pet-prompt--expanded {
+  flex: 1 1 auto;
+}
+
+.pet-prompt--expanded .pet-prompt-header {
+  align-items: flex-start;
+}
+
+.pet-prompt--expanded .pet-prompt-heading {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 1px;
+}
+
+.pet-prompt--expanded .pet-prompt-heading strong {
+  display: block;
+  overflow: hidden;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.pet-prompt--expanded .pet-prompt-detail {
+  display: block;
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0 5px 22px 0;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.pet-prompt--detail-overflow::after {
+  position: absolute;
+  right: 14px;
+  bottom: 11px;
+  left: 56px;
+  z-index: 1;
+  height: 26px;
+  pointer-events: none;
+  background: linear-gradient(transparent, var(--prompt-surface));
+  content: "";
+}
+
+.pet-prompt-toggle {
+  display: inline-flex;
+  min-height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 5px 5px 4px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--prompt-accent);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.pet-prompt-toggle:hover {
+  background: var(--prompt-icon-surface);
+}
+
+.pet-prompt-toggle:focus-visible {
+  outline: 2px solid var(--prompt-accent);
+  outline-offset: 1px;
+}
+
+.pet-prompt-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  transition: transform 160ms ease;
+}
+
+.pet-prompt--expanded .pet-prompt-toggle svg {
+  transform: rotate(180deg);
+}
+
+.pet-prompt-progress {
+  position: absolute;
+  right: 12px;
+  bottom: 0;
+  left: 12px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(66 99 235 / 10%);
+}
+
+.pet-prompt-progress > span {
+  display: block;
+  width: 34%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--prompt-accent);
+  animation: prompt-progress 1.45s ease-in-out infinite;
+  transform: translateX(-120%);
+}
+
+.quick-composer {
+  margin: 10px 12px 0;
+}
+
+.quick-composer-shell {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  background: var(--surface-raised-translucent);
+  box-shadow: var(--shadow-raised);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.quick-composer-shell:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--focus-ring-soft);
+}
+
+.quick-composer input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 10px 8px 10px 12px;
+}
+
+.quick-composer input::placeholder {
+  color: var(--text-placeholder);
+}
+
+.quick-composer input:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.quick-composer button {
+  min-height: 32px;
+  margin-right: 6px;
+  padding: 5px 10px;
+  border-radius: 9px;
+  background: var(--action-primary);
+  color: var(--color-white);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition:
+    background-color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.quick-composer button:hover:not(:disabled) {
+  background: var(--action-primary-hover);
+}
+
+.quick-composer button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.quick-composer button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.quick-composer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .task-panel {
@@ -48,6 +458,7 @@ button {
   flex-direction: column;
   min-height: 0;
   padding: 14px;
+  overflow: hidden;
   border: 1px solid #e5e5e5;
   border-radius: 20px;
   background: #fff;
@@ -89,37 +500,6 @@ button {
   gap: 7px;
 }
 
-.conversation-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  margin-top: 9px;
-}
-
-.conversation-actions select {
-  min-width: 0;
-  flex: 1;
-  border: 1px solid #e5e5e5;
-  border-radius: 8px;
-  background: #fff;
-  color: #4b5563;
-  font-size: 11px;
-  padding: 5px 7px;
-}
-
-.conversation-actions .button-secondary {
-  flex: 0 0 auto;
-  padding: 5px 7px;
-  font-size: 10px;
-}
-
-.panel-status--awaiting_permission,
-.panel-status--awaiting_confirmation {
-  background: #fff7ed;
-  color: #c2410c;
-}
-
 .panel-status--executing,
 .panel-status--planning {
   background: #ecfdf8;
@@ -131,50 +511,174 @@ button {
   color: #d92d20;
 }
 
-.message-list {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 0;
-  margin-top: 8px;
-  overflow-y: auto;
-  padding: 2px 4px 8px 0;
-  scrollbar-color: #d9d9d9 transparent;
-}
-
-.message {
-  max-width: 90%;
-  padding: 9px 11px;
-  border-radius: 14px;
-  color: #343541;
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.message p {
+.agent-steps {
+  align-self: flex-start;
+  width: min(90%, 440px);
   margin: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fafafa;
+  color: #4b5563;
+  font-size: 12px;
+}
+
+.agent-steps summary {
+  cursor: pointer;
+  padding: 7px 10px;
+  font-weight: 600;
+}
+
+.agent-steps ol {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0 12px 9px 27px;
+}
+
+.agent-steps li {
+  padding-left: 1px;
+}
+
+.agent-steps li[data-status="started"] {
+  opacity: 0.65;
+}
+
+.agent-steps li[data-status="failed"] {
+  color: #b91c1c;
+}
+
+.agent-steps li[data-status="skipped"] {
+  color: #6b7280;
+  text-decoration: line-through;
+}
+
+.agent-step-title {
+  font-weight: 500;
+}
+
+.agent-step-tools,
+.agent-step-detail {
+  display: block;
+  margin-top: 1px;
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.operation-log-card {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #dbe4ee;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.operation-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #334155;
+  font-size: 11px;
+}
+
+.operation-log-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.operation-log-actions .button-secondary {
+  padding: 4px 7px;
+  border-radius: 7px;
+  background: #fff;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.operation-log {
+  max-height: 168px;
+  overflow: auto;
+  padding: 7px;
+  border-radius: 8px;
+  background: #111827;
+  color: #e5e7eb;
+  font:
+    10px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.message--assistant {
-  align-self: flex-start;
-  border: 1px solid #ececf1;
-  background: #f7f7f8;
+.operation-log-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-height: 15px;
 }
 
-.message--user {
-  align-self: flex-end;
-  background: #2f2f2f;
-  color: #fff;
+.operation-log-stream {
+  flex: 0 0 22px;
+  color: #94a3b8;
+  user-select: none;
 }
 
-.message--error {
-  align-self: flex-start;
-  border: 1px solid #fecaca;
-  background: #fef2f2;
-  color: #b91c1c;
+.operation-log-line--stderr .operation-log-stream {
+  color: #fca5a5;
+}
+
+.operation-log-content {
+  min-width: 0;
+  flex: 1;
+}
+
+.operation-log-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #93c5fd;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.operation-result-card {
+  flex: 0 0 auto;
+  max-height: 180px;
+  overflow: auto;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #d1fae5;
+  border-radius: 12px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 11px;
+}
+
+.operation-result-card strong {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.operation-result-card pre {
+  max-height: 138px;
+  overflow: auto;
+  margin: 0;
+  color: #14532d;
+  font:
+    10px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .action-card {
@@ -222,43 +726,35 @@ button {
   color: #9a3412;
 }
 
-.approval-command,
-.approval-script,
-.approval-facts {
+.settings-section > input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.terminal-run-row {
   display: grid;
   gap: 4px;
-  margin: 7px 0;
-  padding: 8px;
-  border-radius: 8px;
-  background: #fff;
+  padding: 9px 0;
+  border-top: 1px solid var(--line-subtle);
+  font-size: 12px;
 }
 
-.approval-command span,
-.approval-script span {
-  color: #9a3412;
-  font-size: 10px;
-  font-weight: 700;
+.terminal-run-row small {
+  color: var(--text-muted);
 }
 
-.approval-command code,
-.approval-script code,
-.approval-script small,
-.approval-facts span {
-  color: #343541;
-  font:
-    10px/1.45 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
-  overflow-wrap: anywhere;
+.terminal-run-row code {
+  max-height: 52px;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.approval-facts {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.approval-script small {
-  color: #6b7280;
+.terminal-run-diff {
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .action-buttons,
@@ -621,6 +1117,15 @@ button {
   position: absolute;
   right: 16px;
   bottom: 16px;
+  z-index: 10;
+  transition: opacity 140ms ease;
+}
+
+.app-shell.expanded .pet-dock {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  align-self: flex-end;
 }
 
 .app-shell.collapsed .pet-dock {
@@ -818,52 +1323,6 @@ button {
   animation: pet-celebrate-bounce 880ms ease-in-out infinite;
 }
 
-.pet-state {
-  position: absolute;
-  right: 10px;
-  bottom: 8px;
-  left: 10px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgb(15 23 42 / 48%);
-  color: rgb(255 255 255 / 84%);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-shadow: 0 1px 3px rgb(15 23 42 / 40%);
-  overflow-wrap: anywhere;
-  text-align: center;
-  transform: translateY(0);
-  transition:
-    background-color 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    box-shadow 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    color 320ms ease-out,
-    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.pet-button:is(.pet-state-happy, .pet-state-encourage, .pet-state-celebrate) .pet-state {
-  background-color: rgb(120 71 20 / 58%);
-  box-shadow: 0 0 14px rgb(251 191 36 / 12%);
-  color: #fff7df;
-  transform: translateY(-1px);
-  transition-delay: 60ms;
-}
-
-.pet-button:is(.pet-state-thinking, .pet-state-reminder) .pet-state {
-  background-color: rgb(12 74 110 / 62%);
-  color: #e0f2fe;
-}
-
-.pet-button.pet-state-worried .pet-state {
-  background-color: rgb(76 29 149 / 58%);
-  color: #f3e8ff;
-}
-
-.pet-button:is(.pet-state-sleepy, .pet-state-focus, .pet-state-nod) .pet-state {
-  background-color: rgb(6 78 59 / 58%);
-  color: #d1fae5;
-}
-
 @keyframes pet-image-enter {
   from {
     opacity: 0.25;
@@ -1030,10 +1489,46 @@ button {
   }
 }
 
+@keyframes prompt-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes prompt-icon-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes prompt-progress {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  60%,
+  100% {
+    transform: translateX(390%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pet-button,
   .pet-visual,
-  .loading-ring {
+  .loading-ring,
+  .pet-prompt,
+  .pet-prompt-icon-motion,
+  .pet-prompt-progress > span,
+  .pet-prompt-toggle svg,
+  .pet-dock,
+  .quick-composer-shell,
+  .quick-composer button {
     animation: none !important;
     transition: none !important;
   }
@@ -1053,12 +1548,5 @@ button {
   .pet-visual::after {
     transform: none !important;
     transition: none;
-  }
-
-  .pet-state {
-    transform: none !important;
-    transition:
-      background-color 120ms ease-out,
-      color 120ms ease-out;
   }
 }
