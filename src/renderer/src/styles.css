@@ -1031,8 +1031,14 @@ button {
   animation: pet-image-enter 260ms var(--pet-ease-out) both;
 }
 
-.pet-face--video {
+/* Black-background AI videos: screen-blend makes #000 disappear on the transparent window.
+   True alpha WebM is better long-term (export green-screen / transparent from the AI tool). */
+.pet-face--video,
+.pet-face--video.pet-face--active {
   background: transparent;
+  filter: none;
+  mix-blend-mode: screen;
+  animation: none;
 }
 
 .pet-button:is(.pet-state-happy, .pet-state-encourage, .pet-state-celebrate) .pet-face--active {
