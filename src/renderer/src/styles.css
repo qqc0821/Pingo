@@ -28,6 +28,8 @@ textarea {
 
 button {
   border: 0;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 .app-shell {
@@ -47,46 +49,241 @@ button {
 }
 
 .pet-prompt-layer {
-  flex: 0 0 auto;
+  min-height: 0;
+  flex: 0 1 auto;
   z-index: 20;
 }
 
-.pet-prompt {
+.app-shell.prompt-detail-open .pet-prompt-layer {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 3px;
-  min-height: 82px;
-  justify-content: center;
-  padding: 14px 20px;
-  border: 1px solid rgb(255 255 255 / 72%);
-  border-radius: 28px;
-  background: rgb(255 255 255 / 96%);
-  box-shadow: 0 14px 30px rgb(15 23 42 / 16%);
 }
 
-.pet-prompt strong,
-.pet-prompt span {
-  min-width: 0;
+.app-shell.prompt-detail-open .quick-composer {
+  display: none;
 }
 
-.pet-prompt strong {
+.pet-prompt {
+  --prompt-accent: #667085;
+  --prompt-border: #e1e5eb;
+  --prompt-icon-surface: #f2f4f7;
+  --prompt-surface: #f8f9fb;
+
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
   overflow: hidden;
+  padding: 12px 14px 11px 12px;
+  border: 1px solid var(--prompt-border);
+  border-radius: 20px;
+  background: linear-gradient(135deg, var(--prompt-surface) 0%, rgb(255 255 255 / 98%) 72%);
+  box-shadow:
+    0 16px 34px rgb(15 23 42 / 14%),
+    0 2px 8px rgb(15 23 42 / 6%);
+  animation: prompt-card-enter 180ms ease-out both;
+}
+
+.pet-prompt--progress {
+  --prompt-accent: #4263eb;
+  --prompt-border: #dce4ff;
+  --prompt-icon-surface: #eef2ff;
+  --prompt-surface: #f7f9ff;
+}
+
+.pet-prompt--success {
+  --prompt-accent: #0f8a6a;
+  --prompt-border: #ccebe2;
+  --prompt-icon-surface: #e8f7f2;
+  --prompt-surface: #f4fbf8;
+}
+
+.pet-prompt--warning {
+  --prompt-accent: #b65f08;
+  --prompt-border: #f5dab0;
+  --prompt-icon-surface: #fff1da;
+  --prompt-surface: #fff9f0;
+}
+
+.pet-prompt--error {
+  --prompt-accent: #c83b4b;
+  --prompt-border: #f4cdd2;
+  --prompt-icon-surface: #ffebee;
+  --prompt-surface: #fff7f8;
+}
+
+.pet-prompt-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.pet-prompt-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--prompt-icon-surface);
+  color: var(--prompt-accent);
+}
+
+.prompt-icon-svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.pet-prompt-icon-motion {
+  display: grid;
+  place-items: center;
+}
+
+.pet-prompt--progress .pet-prompt-icon-motion {
+  animation: prompt-icon-turn 1.8s linear infinite;
+}
+
+.pet-prompt-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.pet-prompt-label {
+  flex: 0 0 auto;
+  color: var(--prompt-accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+
+.pet-prompt-heading strong {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
   color: #202123;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.pet-prompt span {
-  max-height: 72px;
-  overflow-y: auto;
-  color: #7a7a80;
+.pet-prompt-detail {
+  display: none;
+  min-width: 0;
+  margin: 8px 0 0 44px;
+  color: #666b75;
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.5;
   overflow-wrap: anywhere;
-  overscroll-behavior: contain;
+  text-wrap: pretty;
   white-space: pre-wrap;
+}
+
+.pet-prompt--expanded {
+  flex: 1 1 auto;
+}
+
+.pet-prompt--expanded .pet-prompt-header {
+  align-items: flex-start;
+}
+
+.pet-prompt--expanded .pet-prompt-heading {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 1px;
+}
+
+.pet-prompt--expanded .pet-prompt-heading strong {
+  display: block;
+  overflow: hidden;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.pet-prompt--expanded .pet-prompt-detail {
+  display: block;
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding-right: 5px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.pet-prompt-toggle {
+  display: inline-flex;
+  min-height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 5px 5px 4px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--prompt-accent);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.pet-prompt-toggle:hover {
+  background: var(--prompt-icon-surface);
+}
+
+.pet-prompt-toggle:focus-visible {
+  outline: 2px solid var(--prompt-accent);
+  outline-offset: 1px;
+}
+
+.pet-prompt-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  transition: transform 160ms ease;
+}
+
+.pet-prompt--expanded .pet-prompt-toggle svg {
+  transform: rotate(180deg);
+}
+
+.pet-prompt-progress {
+  position: absolute;
+  right: 12px;
+  bottom: 0;
+  left: 12px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(66 99 235 / 10%);
+}
+
+.pet-prompt-progress > span {
+  display: block;
+  width: 34%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--prompt-accent);
+  animation: prompt-progress 1.45s ease-in-out infinite;
+  transform: translateX(-120%);
 }
 
 .quick-composer {
@@ -982,6 +1179,7 @@ button {
   right: 16px;
   bottom: 16px;
   z-index: 10;
+  transition: opacity 140ms ease;
 }
 
 .app-shell.expanded .pet-dock {
@@ -1357,10 +1555,44 @@ button {
   }
 }
 
+@keyframes prompt-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes prompt-icon-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes prompt-progress {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  60%,
+  100% {
+    transform: translateX(390%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pet-button,
   .pet-visual,
   .loading-ring,
+  .pet-prompt,
+  .pet-prompt-icon-motion,
+  .pet-prompt-progress > span,
+  .pet-prompt-toggle svg,
+  .pet-dock,
   .quick-composer-shell,
   .quick-composer button {
     animation: none !important;
