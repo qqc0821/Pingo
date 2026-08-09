@@ -16,6 +16,7 @@ import type {
   TaskState,
 } from "../../shared/types.js"
 import { ModelClient } from "../ai/client.js"
+import { AgentOrchestrator } from "../agent/orchestrator.js"
 import { AuditLogger } from "../security/auditLogger.js"
 import { ApprovalBroker } from "../security/approvalBroker.js"
 import { CapabilityManager } from "../security/capabilityManager.js"
@@ -36,10 +37,7 @@ import { getRealProjectRoot } from "../security/pathGuard.js"
 import { detectSandboxDenial } from "../terminal/policyCatalog.js"
 import type { SettingsStore } from "../store.js"
 import { UndoManager } from "./undoManager.js"
-import type {
-  ConversationStore,
-  TerminalRunLedgerRecord,
-} from "../conversations/conversationStore.js"
+import type { TerminalRunLedgerRecord, TerminalRunStore } from "../terminal/runStore.js"
 
 export type TaskEventSink = (event: ChatStreamEvent) => void
 
@@ -51,7 +49,6 @@ interface PermissionWaiter {
 interface TaskRecord {
   taskId: string
   sourceWindowId: string
-  conversationId?: string
   emit: TaskEventSink
   controller: AbortController
   client: ModelClient
@@ -75,7 +72,7 @@ export interface TaskManagerDependencies {
   terminalRunner?: TerminalRunner
   terminalFeatureFlags?: TerminalFeatureFlags
   terminalTrustManager?: TerminalTrustManager
-  conversationStore?: Pick<ConversationStore, "recordTerminalRun" | "getTerminalRun">
+  terminalRunStore?: Pick<TerminalRunStore, "recordTerminalRun" | "getTerminalRun">
 }
 
 export class TaskManager {
@@ -99,13 +96,12 @@ export class TaskManager {
     sourceWindowId: string,
     messages: ChatMessageInput[],
     emit: TaskEventSink,
-    options?: { taskId?: string; conversationId?: string },
+    options?: { taskId?: string },
   ): string {
     const taskId = options?.taskId ?? randomUUID()
     const task: TaskRecord = {
       taskId,
       sourceWindowId,
-      ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
       emit,
       controller: new AbortController(),
       client: new ModelClient(),
@@ -119,7 +115,7 @@ export class TaskManager {
   }
 
   rerunTerminalRun(sourceWindowId: string, runId: string, emit: TaskEventSink): { taskId: string } {
-    const record = this.dependencies.conversationStore?.getTerminalRun(runId)
+    const record = this.dependencies.terminalRunStore?.getTerminalRun(runId)
     if (!record) throw new Error("运行记录不存在")
     const taskId = randomUUID()
     const task: TaskRecord = {
@@ -334,14 +330,23 @@ export class TaskManager {
   private async run(task: TaskRecord, messages: ChatMessageInput[]): Promise<void> {
     this.emitState(task, "planning")
     try {
-      await task.client.stream(
-        messages,
-        (event) => this.handleModelEvent(task, event),
-        (name, args) => this.executeTool(task, name, args),
-        TOOL_DEFINITIONS,
-      )
+      this.handleModelEvent(task, { type: "start" })
+      const projectPath = this.dependencies.settingsStore.getAuthorizedProjectPath()
+      const projectName = projectPath ? projectPath.split(/[/\\]/).filter(Boolean).at(-1) : undefined
+      const orchestrator = new AgentOrchestrator({
+        taskId: task.taskId,
+        client: task.client,
+        toolDefinitions: TOOL_DEFINITIONS,
+        executeTool: (name, args) => this.executeTool(task, name, args),
+        isReadOnlyTool: (name) => READ_ONLY_TOOL_NAMES.has(name),
+        emit: (event) => this.handleModelEvent(task, event),
+        isCancelled: () => task.cancelled,
+        projectAuthorized: Boolean(projectPath),
+        projectName,
+      })
+      await orchestrator.run(messages)
       if (!isTerminal(task.state) && !task.cancelled) {
-        this.emitState(task, "completed")
+        this.handleModelEvent(task, { type: "done" })
       }
     } catch (error) {
       if (task.cancelled) return
@@ -572,11 +577,10 @@ export class TaskManager {
               ? "completed"
               : "failed"
           const intent = plan.terminalPlan.intent as { kind: string; action?: string }
-          this.dependencies.conversationStore?.recordTerminalRun({
+          this.dependencies.terminalRunStore?.recordTerminalRun({
             runId: randomUUID(),
             operationId: plan.operationId,
             taskId: task.taskId,
-            ...(task.conversationId ? { conversationId: task.conversationId } : {}),
             intentKind: intent.kind,
             ...(intent.action === undefined ? {} : { intentAction: intent.action }),
             argv: plan.terminalPlan.argv,

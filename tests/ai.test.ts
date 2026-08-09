@@ -46,68 +46,31 @@ test("model client parses streaming chunks and guards missing keys", async () =>
   }
 })
 
-test("model client executes a bounded tool loop before final answer", async () => {
+test("model client completes one tool-aware request without executing tools", async () => {
   const previousFetch = globalThis.fetch
   const previousKey = process.env.MODEL_API_KEY
   try {
     process.env.MODEL_API_KEY = "test-key"
-    let callCount = 0
     const requestBodies: unknown[] = []
     globalThis.fetch = async (_input, init) => {
-      callCount += 1
       requestBodies.push(JSON.parse(String(init?.body)))
-      if (callCount === 1) {
-        return new Response(
-          JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content: null,
-                  tool_calls: [
-                    {
-                      id: "call-1",
-                      type: "function",
-                      function: { name: "list_files", arguments: "{}" },
-                    },
-                  ],
-                },
-              },
-            ],
-          }),
-          { status: 200 },
-        )
-      }
-      return new Response(JSON.stringify({ choices: [{ message: { content: "项目已读取" } }] }), {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "", tool_calls: [{ id: "call-1", type: "function", function: { name: "list_files", arguments: "{}" } }] } }] }), {
         status: 200,
       })
     }
 
-    const events: string[] = []
-    await new ModelClient().stream(
+    const result = await new ModelClient().completeWithTools(
       [{ role: "user", content: "看看项目" }],
-      (event) => events.push(event.type),
-      async () => ({ content: "package.json", detail: "正在列出项目文件…" }),
       toolDefinitions,
     )
-    assert.equal(callCount, 2)
-    assert.deepEqual(events, ["start", "tool", "chunk", "done"])
-    const secondRequest = requestBodies[1] as {
-      messages: Array<Record<string, unknown>>
-    }
-    assert.deepEqual(secondRequest.messages.slice(-2), [
-      {
-        role: "assistant",
-        content: null,
-        tool_calls: [
-          {
-            id: "call-1",
-            type: "function",
-            function: { name: "list_files", arguments: "{}" },
-          },
-        ],
-      },
-      { role: "tool", tool_call_id: "call-1", content: "package.json" },
-    ])
+    assert.deepEqual(result, {
+      content: "",
+      toolCalls: [{ id: "call-1", name: "list_files", arguments: "{}" }],
+    })
+    const request = requestBodies[0] as { stream: boolean; tools: ToolDefinition[]; tool_choice: string }
+    assert.equal(request.stream, false)
+    assert.deepEqual(request.tools, toolDefinitions)
+    assert.equal(request.tool_choice, "auto")
   } finally {
     globalThis.fetch = previousFetch
     if (previousKey === undefined) delete process.env.MODEL_API_KEY

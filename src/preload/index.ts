@@ -47,18 +47,6 @@ const api: PingoAPI = {
     deny: (taskId) => ipcRenderer.invoke("task:deny", taskId),
     onEvent: (listener) => subscribe("pingo:task-event", listener),
   },
-  conversation: {
-    list: () => ipcRenderer.invoke("conversation:list"),
-    get: (conversationId) => ipcRenderer.invoke("conversation:get", conversationId),
-    create: () => ipcRenderer.invoke("conversation:create"),
-    submit: (request) => ipcRenderer.invoke("conversation:submit", request),
-    clearContext: (request) => ipcRenderer.invoke("conversation:clear-context", request),
-    undoClearContext: (conversationId) =>
-      ipcRenderer.invoke("conversation:undo-clear-context", conversationId),
-    contextPreview: (conversationId) =>
-      ipcRenderer.invoke("conversation:context-preview", conversationId),
-    importLegacy: (messages) => ipcRenderer.invoke("conversation:import-legacy", messages),
-  },
   audit: {
     list: () => ipcRenderer.invoke("audit:list"),
   },

@@ -1,6 +1,6 @@
 # Pingo
 
-Pingo 是一个仅支持 macOS 的 Electron 桌面伴侣 MVP：拥有自己的性格，支持聊天和日常辅助，并逐步建立用户明确授权的长期记忆。项目文件等开发工具能力仅作为可选的低优先级辅助。
+Pingo 是一个仅支持 macOS 的 Electron 桌面伴侣 MVP：拥有自己的性格，支持聊天和日常辅助。聊天上下文仅在当前应用运行期间保留，重新打开应用时会从新的空白对话开始；项目文件等开发工具能力仅作为可选的低优先级辅助。
 
 ## 开发运行
 
@@ -33,6 +33,24 @@ npm run test
 npm run build
 npm run pack:mac
 ```
+
+## AI Lab（隔离调试）
+
+在接入正式对话前，可用独立的 AI Lab 对模型回答和工具调用做回归测试。它使用固定的虚拟项目；读取、写入和终端请求都不会触碰真实工作区，其中高风险操作只会被记录并安全拦截。
+
+```bash
+# 运行全部基准用例（需要 .env 中的 MODEL_API_KEY）
+npm run ai:lab
+
+# 仅调试项目读取或写入拦截用例
+npm run ai:lab -- --scenario project-read
+npm run ai:lab -- --scenario blocked-write --json
+
+# 临时对比另一模型或兼容接口，不改动应用设置
+npm run ai:lab -- --scenario project-read --model your-model --base-url https://example.com/v1/chat/completions
+```
+
+基准覆盖纯回答、基于文件事实的问答和写入请求拦截。每次都会给出工具轨迹、最终回答和逐项通过/失败结果；失败时命令以非零状态退出，便于持续集成或手动比较。
 
 安装包输出到 `dist/`，当前目标为 macOS arm64。未签名应用首次启动时需要在 macOS 中允许打开；公开分发前需配置 Developer ID 签名和公证。
 

@@ -21,76 +21,28 @@ export interface ChatMessageInput {
   content: string
 }
 
-export type ConversationItemKind =
-  | "message"
-  | "tool"
-  | "capability-request"
-  | "approval-request"
-  | "operation-result"
-  | "context-cleared"
-  | "system"
+export type AgentStepPhase =
+  "planning" | "model" | "tool_batch" | "awaiting_approval" | "summarizing" | "budget_exceeded"
 
-export type ConversationItemStatus = "complete" | "streaming" | "interrupted" | "error"
+export type AgentStepStatus = "started" | "completed" | "failed" | "skipped"
 
-export interface ConversationSummary {
-  conversationId: string
-  title: string
-  activeContextEpochId: string
-  revision: number
-  createdAt: number
-  updatedAt: number
-  archivedAt?: number
-}
-
-export interface ConversationItem {
-  itemId: string
-  conversationId: string
-  turnId?: string
-  runId?: string
-  contextEpochId: string
-  kind: ConversationItemKind
-  role?: ChatMessageRole
-  status: ConversationItemStatus
-  content: string
-  detail?: string
-  createdAt: number
-  updatedAt: number
-}
-
-export interface ConversationDetail extends ConversationSummary {
-  items: ConversationItem[]
-}
-
-export interface ConversationSubmitRequest {
-  conversationId: string
-  clientRequestId: string
-  expectedRevision: number
-  expectedContextEpochId: string
-  content: string
-}
-
-export interface ConversationSubmitResult {
+export interface AgentStepEvent {
+  type: "agent-step"
   taskId: string
-  started: boolean
-  conversation: ConversationDetail
-}
-
-export interface ClearContextRequest {
-  conversationId: string
-  expectedRevision: number
-}
-
-export interface ContextPreview {
-  conversationId: string
-  contextEpochId: string
-  messageCount: number
-  characterCount: number
+  stepId: string
+  loopIndex: number
+  phase: AgentStepPhase
+  status: AgentStepStatus
+  title: string
+  detail?: string
+  toolNames?: string[]
 }
 
 export type ChatStreamEvent =
   | { type: "start" }
   | { type: "chunk"; content: string }
   | { type: "tool"; name: string; detail: string }
+  | AgentStepEvent
   | OperationProgressEvent
   | { type: "task-state"; taskId: string; state: TaskState }
   | { type: "capability-request"; taskId: string; capabilities: Capability[]; scopeRoots: string[] }
@@ -280,7 +232,6 @@ export interface TerminalRunRecord {
   runId: string
   operationId: string
   taskId: string
-  conversationId?: string
   intentKind: string
   intentAction?: string
   argv: string[]
@@ -534,18 +485,6 @@ export interface PingoAPI {
     grant: (request: CapabilityRequest) => Promise<CapabilityGrant | null>
     deny: (taskId: string) => Promise<boolean>
     onEvent: (listener: (event: ChatStreamEvent) => void) => () => void
-  }
-  conversation: {
-    list: () => Promise<ConversationSummary[]>
-    get: (conversationId: string) => Promise<ConversationDetail | null>
-    create: () => Promise<ConversationDetail>
-    submit: (request: ConversationSubmitRequest) => Promise<ConversationSubmitResult>
-    clearContext: (request: ClearContextRequest) => Promise<ConversationDetail>
-    undoClearContext: (conversationId: string) => Promise<ConversationDetail | null>
-    contextPreview: (conversationId: string) => Promise<ContextPreview | null>
-    importLegacy: (
-      messages: Array<{ id: string; role: "user" | "assistant" | "error"; content: string }>,
-    ) => Promise<ConversationDetail | null>
   }
   audit: {
     list: () => Promise<AuditRecord[]>

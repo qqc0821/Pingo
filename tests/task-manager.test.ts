@@ -294,7 +294,7 @@ test("Ledger rerun creates a new operation and always asks again even when trust
       join(mkdtempSync(join(tmpdir(), "pingo-rerun-audit-")), "audit.jsonl"),
     ),
     terminalTrustManager: trustManager,
-    conversationStore: storedRuns,
+    terminalRunStore: storedRuns,
   })
   const events: ChatStreamEvent[] = []
   const rerun = manager.rerunTerminalRun("window-rerun", oldRecord.runId, (event) =>

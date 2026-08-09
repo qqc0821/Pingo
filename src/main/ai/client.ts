@@ -1,17 +1,10 @@
 import type { ChatMessageInput, ChatStreamEvent } from "../../shared/types.js"
-import type { ToolDefinition, ToolExecution } from "../tools/types.js"
+import type { ToolDefinition } from "../tools/types.js"
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com/v1/chat/completions"
 const DEFAULT_MODEL = "deepseek-chat"
 const NETWORK_REQUEST_TIMEOUT_MS = 60_000
 const MAX_HISTORY = 24
-const MAX_TOOL_LOOPS = 6
-
-const TOOL_SYSTEM_MESSAGE: ChatMessageInput = {
-  role: "system",
-  content:
-    "你是 Pingo，本地项目助手。只能通过结构化工具提出请求；权限、风险等级、确认结果和实际执行都由 Pingo 主进程决定。不要索要或读取密钥、环境变量、.git、.ssh 或目录外文件；收到 denied、未授权或策略拒绝结果时，向用户解释并停止重复相同操作。不要构造 Shell 字符串，不要提出 Shell、解释器、sudo、安装、永久删除或系统自动化请求。",
-}
 
 interface ActiveRequest {
   controller: AbortController
@@ -19,13 +12,13 @@ interface ActiveRequest {
   timedOut: boolean
 }
 
-interface ToolCall {
+export interface ToolCall {
   id: string
   name: string
   arguments: string
 }
 
-interface ModelToolCall {
+export interface ModelToolCall {
   id: string
   type: "function"
   function: {
@@ -34,17 +27,15 @@ interface ModelToolCall {
   }
 }
 
-type ModelRequestMessage =
+export type ModelRequestMessage =
   | ChatMessageInput
   | { role: "assistant"; content: string | null; tool_calls: ModelToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string }
 
-interface CompletionResult {
+export interface CompletionResult {
   content: string
   toolCalls: ToolCall[]
 }
-
-export type ToolExecutor = (name: string, args: unknown) => Promise<ToolExecution>
 
 export class ModelClient {
   private activeRequest: ActiveRequest | null = null
@@ -52,8 +43,6 @@ export class ModelClient {
   async stream(
     messages: ChatMessageInput[],
     emit: (event: ChatStreamEvent) => void,
-    executeTool?: ToolExecutor,
-    toolDefinitions: ToolDefinition[] = [],
   ): Promise<void> {
     this.cancel()
 
@@ -76,11 +65,7 @@ export class ModelClient {
     emit({ type: "start" })
 
     try {
-      if (executeTool && toolDefinitions.length > 0) {
-        await this.streamWithTools(messages, emit, executeTool, toolDefinitions, apiKey, request)
-      } else {
-        await this.streamText(messages, emit, apiKey, request)
-      }
+      await this.streamText(messages, emit, apiKey, request)
       if (!request.cancelled) emit({ type: "done" })
     } catch (error) {
       if (request.cancelled) emit({ type: "cancelled" })
@@ -98,6 +83,35 @@ export class ModelClient {
     this.activeRequest = null
   }
 
+  async completeWithTools(
+    messages: ModelRequestMessage[],
+    toolDefinitions: ToolDefinition[],
+  ): Promise<CompletionResult> {
+    this.cancel()
+    const apiKey = process.env.MODEL_API_KEY?.trim()
+    if (!apiKey) {
+      throw new Error(
+        "尚未配置模型密钥。开发环境请复制 .env.example 为 .env；打包版请在 ~/Library/Application Support/pingo/.env 中填写 MODEL_API_KEY。",
+      )
+    }
+
+    const request: ActiveRequest = {
+      controller: new AbortController(),
+      cancelled: false,
+      timedOut: false,
+    }
+    this.activeRequest = request
+    try {
+      const response = await this.fetchCompletion(messages, apiKey, false, request, toolDefinitions)
+      return parseCompletion(await response.json())
+    } catch (error) {
+      if (request.timedOut) throw new Error("模型请求超时，请稍后重试。")
+      throw error
+    } finally {
+      if (this.activeRequest === request) this.activeRequest = null
+    }
+  }
+
   private async streamText(
     messages: ChatMessageInput[],
     emit: (event: ChatStreamEvent) => void,
@@ -107,50 +121,6 @@ export class ModelClient {
     const response = await this.fetchCompletion(messages.slice(-MAX_HISTORY), apiKey, true, request)
     if (!response.body) throw new Error("模型服务没有返回可读取的流")
     await readServerSentEvents(response.body, emit, request.controller.signal)
-  }
-
-  private async streamWithTools(
-    messages: ChatMessageInput[],
-    emit: (event: ChatStreamEvent) => void,
-    executeTool: ToolExecutor,
-    toolDefinitions: ToolDefinition[],
-    apiKey: string,
-    request: ActiveRequest,
-  ): Promise<void> {
-    let conversation: ModelRequestMessage[] = [TOOL_SYSTEM_MESSAGE, ...messages.slice(-MAX_HISTORY)]
-
-    for (let loop = 0; loop < MAX_TOOL_LOOPS; loop += 1) {
-      const response = await this.fetchCompletion(
-        conversation,
-        apiKey,
-        false,
-        request,
-        toolDefinitions,
-      )
-      const result = parseCompletion(await response.json())
-      if (result.content) emit({ type: "chunk", content: result.content })
-      if (result.toolCalls.length === 0) return
-
-      conversation = [
-        ...conversation,
-        {
-          role: "assistant",
-          content: result.content || null,
-          tool_calls: result.toolCalls.map(toModelToolCall),
-        },
-      ]
-      for (const toolCall of result.toolCalls) {
-        if (request.cancelled) return
-        const args = parseToolArguments(toolCall.arguments)
-        // This promise may intentionally wait for a human permission or approval decision.
-        // Execution-specific limits belong to the tool (for example TerminalRunner), not here.
-        const execution = await executeTool(toolCall.name, args)
-        emit({ type: "tool", name: toolCall.name, detail: execution.detail })
-        conversation.push({ role: "tool", tool_call_id: toolCall.id, content: execution.content })
-      }
-    }
-
-    throw new Error("模型连续请求工具次数过多，已停止本次对话。")
   }
 
   private async fetchCompletion(
@@ -229,7 +199,7 @@ async function readServerSentEvents(
   }
 }
 
-function parseCompletion(value: unknown): CompletionResult {
+export function parseCompletion(value: unknown): CompletionResult {
   if (typeof value !== "object" || value === null) throw new Error("模型返回格式无效")
   const choices = (value as { choices?: unknown }).choices
   if (!Array.isArray(choices) || choices.length === 0) throw new Error("模型没有返回候选回答")
@@ -250,24 +220,29 @@ function parseToolCall(value: unknown): ToolCall[] {
   if (typeof call.id !== "string" || typeof call.function !== "object" || call.function === null)
     return []
   const functionCall = call.function as { name?: unknown; arguments?: unknown }
-  if (typeof functionCall.name !== "string" || typeof functionCall.arguments !== "string") return []
-  return [{ id: call.id, name: functionCall.name, arguments: functionCall.arguments }]
-}
-
-function toModelToolCall(toolCall: ToolCall): ModelToolCall {
-  return {
-    id: toolCall.id,
-    type: "function",
-    function: {
-      name: toolCall.name,
-      arguments: toolCall.arguments,
-    },
+  if (typeof functionCall.name !== "string") return []
+  if (typeof functionCall.arguments === "string") {
+    return [{ id: call.id, name: functionCall.name, arguments: functionCall.arguments }]
   }
+  if (typeof functionCall.arguments === "object" && functionCall.arguments !== null) {
+    return [
+      {
+        id: call.id,
+        name: functionCall.name,
+        arguments: JSON.stringify(functionCall.arguments),
+      },
+    ]
+  }
+  return []
 }
 
-function parseToolArguments(value: string): unknown {
+export function parseToolArguments(value: string | Record<string, unknown>): unknown {
+  if (typeof value === "object" && value !== null) return value
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (!trimmed) return {}
   try {
-    return JSON.parse(value)
+    return JSON.parse(trimmed)
   } catch {
     return null
   }

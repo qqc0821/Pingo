@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "format:check": "prettier --check 'src/**/*.{ts,tsx,css,html}' electron.vite.config.ts eslint.config.js '*.json'",
     "test": "tsx --test tests/*.test.ts",
+    "ai:lab": "tsx scripts/ai-lab.ts",
     "pack:mac": "npm run build && electron-builder --mac --arm64"
   },
   "dependencies": {

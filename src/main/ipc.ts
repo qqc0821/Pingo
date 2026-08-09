@@ -3,13 +3,7 @@ import { dialog } from "electron"
 import type { OpenDialogOptions } from "electron"
 import { realpathSync, statSync } from "node:fs"
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path"
-import type {
-  AppSettings,
-  ClearContextRequest,
-  ConversationSubmitRequest,
-  TrustedWorkspace,
-  UserPreferences,
-} from "../shared/types.js"
+import type { AppSettings, TrustedWorkspace, UserPreferences } from "../shared/types.js"
 import type {
   Capability,
   CapabilityRequest,
@@ -18,7 +12,7 @@ import type {
 } from "../shared/types.js"
 import type { SettingsStore } from "./store.js"
 import { AuditLogger } from "./security/auditLogger.js"
-import { ConversationStore } from "./conversations/conversationStore.js"
+import { TerminalRunStore } from "./terminal/runStore.js"
 import { getRealProjectRoot, isSensitiveRelativePath } from "./security/pathGuard.js"
 import { TaskManager } from "./tasks/taskManager.js"
 import {
@@ -32,11 +26,11 @@ import {
 
 export function registerIpcHandlers(settingsStore: SettingsStore): void {
   const auditLogger = new AuditLogger(join(app.getPath("userData"), "operation-history.jsonl"))
-  const conversationStore = new ConversationStore(join(app.getPath("userData"), "conversations"))
+  const terminalRunStore = new TerminalRunStore()
   const taskManager = new TaskManager({
     settingsStore,
     auditLogger,
-    conversationStore,
+    terminalRunStore,
   })
 
   app.on("browser-window-created", (_event, window) => {
@@ -45,7 +39,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     })
   })
 
-  app.once("will-quit", () => conversationStore.close())
+  app.once("will-quit", () => terminalRunStore.close())
 
   ipcMain.handle("pet:set-expanded", (event, value: unknown) => {
     assertTrustedSender(event.sender)
@@ -203,60 +197,6 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     return { taskId }
   })
 
-  ipcMain.handle("conversation:list", (event) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.list()
-  })
-
-  ipcMain.handle("conversation:get", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.get(parseConversationId(value))
-  })
-
-  ipcMain.handle("conversation:create", (event) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.create()
-  })
-
-  ipcMain.handle("conversation:submit", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    const request = parseConversationSubmitRequest(value)
-    const response = conversationStore.submit(request)
-    if (!response.started) return response
-    const sender = event.sender
-    const messages = conversationStore.getContextForRun(response.taskId)
-    taskManager.submit(
-      String(sender.id),
-      messages,
-      (taskEvent) => {
-        conversationStore.recordTaskEvent(response.taskId, taskEvent)
-        if (!sender.isDestroyed()) sender.send("pingo:task-event", taskEvent)
-      },
-      { taskId: response.taskId, conversationId: request.conversationId },
-    )
-    return response
-  })
-
-  ipcMain.handle("conversation:clear-context", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.clearContext(parseClearContextRequest(value))
-  })
-
-  ipcMain.handle("conversation:undo-clear-context", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.undoClearContext(parseConversationId(value))
-  })
-
-  ipcMain.handle("conversation:context-preview", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.contextPreview(parseConversationId(value))
-  })
-
-  ipcMain.handle("conversation:import-legacy", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    return conversationStore.importLegacy(parseLegacyMessages(value))
-  })
-
   ipcMain.on("task:cancel", (event, value: unknown) => {
     if (!isTrustedSender(event.sender) || typeof value !== "string" || value.length > 120) return
     taskManager.cancel(value, String(event.sender.id))
@@ -339,7 +279,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
   ipcMain.handle("terminal-runs:list", (event, value: unknown) => {
     assertTrustedSender(event.sender)
     const query = parseTerminalRunQuery(value)
-    return conversationStore.searchTerminalRuns(query.query, query.limit)
+    return terminalRunStore.searchTerminalRuns(query.query, query.limit)
   })
 
   ipcMain.handle("terminal-runs:rerun", (event, value: unknown) => {
@@ -363,7 +303,7 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     ) {
       throw new TypeError("运行对比参数无效")
     }
-    return conversationStore.diffTerminalRuns(candidate.leftRunId, candidate.rightRunId)
+    return terminalRunStore.diffTerminalRuns(candidate.leftRunId, candidate.rightRunId)
   })
 
   ipcMain.handle("audit:list", (event) => {
@@ -446,68 +386,6 @@ function parseTerminalRunQuery(value: unknown): { query: string; limit: number }
     query: typeof candidate.query === "string" ? candidate.query : "",
     limit: typeof candidate.limit === "number" ? candidate.limit : 50,
   }
-}
-
-function parseConversationId(value: unknown): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 120)
-    throw new TypeError("conversationId 无效")
-  return value
-}
-
-function parseConversationSubmitRequest(value: unknown): ConversationSubmitRequest {
-  if (typeof value !== "object" || value === null) throw new TypeError("会话提交参数无效")
-  const request = value as Partial<ConversationSubmitRequest>
-  if (
-    typeof request.clientRequestId !== "string" ||
-    request.clientRequestId.length === 0 ||
-    request.clientRequestId.length > 120 ||
-    !Number.isSafeInteger(request.expectedRevision) ||
-    typeof request.expectedContextEpochId !== "string" ||
-    request.expectedContextEpochId.length === 0 ||
-    request.expectedContextEpochId.length > 120 ||
-    typeof request.content !== "string" ||
-    request.content.trim().length === 0 ||
-    request.content.length > 20_000
-  ) {
-    throw new TypeError("会话提交参数无效")
-  }
-  return {
-    conversationId: parseConversationId(request.conversationId),
-    clientRequestId: request.clientRequestId,
-    expectedRevision: request.expectedRevision as number,
-    expectedContextEpochId: request.expectedContextEpochId,
-    content: request.content.trim(),
-  }
-}
-
-function parseClearContextRequest(value: unknown): ClearContextRequest {
-  if (typeof value !== "object" || value === null) throw new TypeError("清空上下文参数无效")
-  const request = value as Partial<ClearContextRequest>
-  if (!Number.isSafeInteger(request.expectedRevision)) throw new TypeError("清空上下文参数无效")
-  return {
-    conversationId: parseConversationId(request.conversationId),
-    expectedRevision: request.expectedRevision as number,
-  }
-}
-
-function parseLegacyMessages(
-  value: unknown,
-): Array<{ id: string; role: "user" | "assistant" | "error"; content: string }> {
-  if (!Array.isArray(value) || value.length > 200) throw new TypeError("旧聊天记录无效")
-  if (
-    !value.every(
-      (message) =>
-        typeof message === "object" &&
-        message !== null &&
-        typeof (message as { id?: unknown }).id === "string" &&
-        ["user", "assistant", "error"].includes((message as { role?: unknown }).role as string) &&
-        typeof (message as { content?: unknown }).content === "string" &&
-        (message as { content: string }).content.length <= 20_000,
-    )
-  ) {
-    throw new TypeError("旧聊天记录无效")
-  }
-  return value as Array<{ id: string; role: "user" | "assistant" | "error"; content: string }>
 }
 
 function isChatMessageInput(value: unknown): value is ChatMessageInput {
