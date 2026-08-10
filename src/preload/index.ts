@@ -12,6 +12,7 @@ const api: PingoAPI = {
   version: "0.1.0",
   pet: {
     setExpanded: (expanded) => ipcRenderer.invoke("pet:set-expanded", expanded),
+    setDetailExpanded: (expanded) => ipcRenderer.invoke("pet:set-detail-expanded", expanded),
     showContextMenu: () => ipcRenderer.send("pet:show-context-menu"),
     dragStart: (screenX, screenY) => ipcRenderer.send("pet:drag-start", screenX, screenY),
     dragMove: (screenX, screenY) => ipcRenderer.send("pet:drag-move", screenX, screenY),

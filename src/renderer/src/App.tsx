@@ -23,15 +23,14 @@ const PROMPT_DETAIL_ID = "pingo-prompt-detail"
 interface PetPrompt {
   tone: PromptTone
   label: string
-  title: string
-  detail: string
+  content: string
+  expandable?: boolean
 }
 
 const BLOCKED_TASK_PROMPT: PetPrompt = {
   tone: "warning",
   label: "需要注意",
-  title: "任务暂时无法继续",
-  detail: "请调整任务后再试。",
+  content: "等待你的确认。请选择是否继续此操作。",
 }
 
 function promptForTaskState(state: TaskState): PetPrompt {
@@ -40,15 +39,13 @@ function promptForTaskState(state: TaskState): PetPrompt {
       return {
         tone: "progress",
         label: "准备中",
-        title: "正在准备任务",
-        detail: "正在检查执行环境与项目上下文。",
+        content: "正在检查执行环境与项目上下文。",
       }
     case "planning":
       return {
         tone: "progress",
         label: "分析中",
-        title: "正在理解你的任务",
-        detail: "正在拆解目标并规划下一步。",
+        content: "正在拆解目标并规划下一步。",
       }
     case "awaiting_permission":
     case "awaiting_confirmation":
@@ -57,29 +54,25 @@ function promptForTaskState(state: TaskState): PetPrompt {
       return {
         tone: "progress",
         label: "执行中",
-        title: "正在处理任务",
-        detail: "Pingo 正在安全地执行操作。",
+        content: "正在应用已确认的操作。",
       }
     case "completed":
       return {
         tone: "progress",
         label: "整理中",
-        title: "正在整理结果",
-        detail: "操作已结束，正在生成清晰的结果摘要。",
+        content: "操作已结束，正在整理最终结果。",
       }
     case "failed":
       return {
         tone: "error",
-        label: "执行失败",
-        title: "任务未完成",
-        detail: "请检查任务描述或项目权限，调整后再试一次。",
+        label: "需要处理",
+        content: "未能完成该请求。请检查任务描述或项目权限，调整后再试一次。",
       }
     case "cancelled":
       return {
         tone: "neutral",
         label: "已取消",
-        title: "任务已取消",
-        detail: "没有继续执行操作。你可以随时重新输入任务。",
+        content: "没有继续执行操作。你可以随时重新输入任务。",
       }
   }
 }
@@ -87,8 +80,7 @@ function promptForTaskState(state: TaskState): PetPrompt {
 const DEFAULT_PROMPT_PREVIEW: PetPrompt = {
   tone: "progress",
   label: "分析中",
-  title: "正在梳理页面结构",
-  detail: "正在检查信息层级、长内容与不同消息状态。",
+  content: "正在检查信息层级、长内容与不同消息状态。",
 }
 
 const PROMPT_PREVIEWS: Record<string, PetPrompt> = {
@@ -96,27 +88,27 @@ const PROMPT_PREVIEWS: Record<string, PetPrompt> = {
   success: {
     tone: "success",
     label: "已完成",
-    title: "页面优化已完成",
-    detail: "已更新提示框的信息层级与交互表现。",
+    content: "提示框的信息层级与交互表现已经更新。",
+    expandable: true,
   },
   warning: {
     tone: "warning",
     label: "需要注意",
-    title: "项目状态需要检查",
-    detail: "请检查任务描述或项目状态后再试。",
+    content: "项目状态需要检查。请确认任务描述或项目状态后再试。",
+    expandable: true,
   },
   error: {
     tone: "error",
     label: "执行失败",
-    title: "无法完成这次操作",
-    detail: "没有找到目标文件。请确认项目目录是否正确，然后再试一次。",
+    content: "没有找到目标文件。请确认项目目录是否正确，然后再试一次。",
+    expandable: true,
   },
   long: {
     tone: "success",
     label: "已完成",
-    title: "提示框体验优化完成",
-    detail:
-      "本次更新重新组织了消息层级，并补充了多种反馈状态。\n\n已完成：\n• 区分处理中、成功、提醒与错误\n• 长内容默认显示摘要，可按需展开\n• 错误消息提供明确的下一步\n• 支持键盘操作与减少动态效果\n\n所有内容都在固定小窗内保持清晰可读。",
+    content:
+      "桌面共有 12 个文件夹。\n\n其中包括：Projects、Documents、Downloads、Screenshots 等。\n\n我已按名称整理完整列表，展开后可以继续查看全部内容。",
+    expandable: true,
   },
 }
 
@@ -172,55 +164,57 @@ function PromptCard({
   prompt,
   expanded,
   onToggle,
+  onDismiss,
 }: {
   prompt: PetPrompt
   expanded: boolean
   onToggle: () => void
+  onDismiss: () => void
 }): ReactElement {
   const liveMode = prompt.tone === "error" ? "assertive" : "polite"
-  const detailRef = useRef<HTMLParagraphElement>(null)
-  const [detailHasOverflow, setDetailHasOverflow] = useState(false)
-  const [detailAtEnd, setDetailAtEnd] = useState(true)
+  const showVisualStatusLabel = prompt.tone !== "success" && prompt.tone !== "progress"
+  const contentRef = useRef<HTMLParagraphElement>(null)
+  const [contentIsClipped, setContentIsClipped] = useState(false)
+  const [contentHasScroll, setContentHasScroll] = useState(false)
+  const [contentAtEnd, setContentAtEnd] = useState(true)
 
   useLayoutEffect(() => {
-    if (!expanded) {
-      setDetailHasOverflow(false)
-      setDetailAtEnd(true)
-      return
-    }
-
-    const detailElement = detailRef.current
-    if (!detailElement) return
+    const contentElement = contentRef.current
+    if (!contentElement) return
     const measure = () => {
-      const hasOverflow = detailElement.scrollHeight > detailElement.clientHeight + 1
-      setDetailHasOverflow(hasOverflow)
-      setDetailAtEnd(
-        !hasOverflow ||
-          detailElement.scrollTop + detailElement.clientHeight >= detailElement.scrollHeight - 1,
+      const hasOverflow = contentElement.scrollHeight > contentElement.clientHeight + 1
+      setContentIsClipped(!expanded && prompt.expandable === true && hasOverflow)
+      setContentHasScroll(expanded && hasOverflow)
+      setContentAtEnd(
+        !expanded ||
+          !hasOverflow ||
+          contentElement.scrollTop + contentElement.clientHeight >= contentElement.scrollHeight - 1,
       )
     }
     const observer = new ResizeObserver(measure)
 
     measure()
-    observer.observe(detailElement)
+    observer.observe(contentElement)
     return () => observer.disconnect()
-  }, [expanded, prompt.detail])
+  }, [expanded, prompt.content, prompt.expandable])
 
-  const handleDetailScroll = useCallback((event: UIEvent<HTMLParagraphElement>) => {
-    const detailElement = event.currentTarget
-    setDetailAtEnd(
-      detailElement.scrollTop + detailElement.clientHeight >= detailElement.scrollHeight - 1,
+  const handleContentScroll = useCallback((event: UIEvent<HTMLParagraphElement>) => {
+    const contentElement = event.currentTarget
+    setContentAtEnd(
+      contentElement.scrollTop + contentElement.clientHeight >= contentElement.scrollHeight - 1,
     )
   }, [])
 
+  const showToggle = expanded || contentIsClipped
+
   return (
     <section
-      className={`pet-prompt pet-prompt--${prompt.tone} ${expanded ? "pet-prompt--expanded" : ""} ${detailHasOverflow && !detailAtEnd ? "pet-prompt--detail-overflow" : ""}`}
+      className={`pet-prompt pet-prompt--${prompt.tone} ${expanded ? "pet-prompt--expanded" : ""} ${contentHasScroll && !contentAtEnd ? "pet-prompt--content-overflow" : ""}`}
       role={prompt.tone === "error" ? "alert" : "status"}
       aria-live={liveMode}
       aria-atomic="true"
     >
-      <span className="visually-hidden">Pingo 提示：</span>
+      <span className="visually-hidden">Pingo 提示：{prompt.label}。</span>
       <div className="pet-prompt-header">
         <span className="pet-prompt-icon" aria-hidden="true">
           <span className="pet-prompt-icon-motion">
@@ -228,31 +222,43 @@ function PromptCard({
           </span>
         </span>
         <div className="pet-prompt-heading">
-          <span className="pet-prompt-label">{prompt.label}</span>
-          <strong>{prompt.title}</strong>
+          {showVisualStatusLabel ? <span className="pet-prompt-label">{prompt.label}</span> : null}
+          <p
+            ref={contentRef}
+            id={PROMPT_DETAIL_ID}
+            className="pet-prompt-content"
+            onScroll={handleContentScroll}
+          >
+            {prompt.content}
+          </p>
         </div>
-        <button
-          className="pet-prompt-toggle"
-          type="button"
-          aria-expanded={expanded}
-          aria-controls={PROMPT_DETAIL_ID}
-          onClick={onToggle}
-        >
-          <span>{expanded ? "收起" : "详情"}</span>
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="m4.75 6.25 3.25 3.25 3.25-3.25" />
-          </svg>
-        </button>
+        {showToggle ? (
+          <button
+            className="pet-prompt-toggle"
+            type="button"
+            aria-expanded={expanded}
+            aria-controls={PROMPT_DETAIL_ID}
+            onClick={onToggle}
+          >
+            <span>{expanded ? "收起" : "查看完整结果"}</span>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m4.75 6.25 3.25 3.25 3.25-3.25" />
+            </svg>
+          </button>
+        ) : null}
+        <div className="pet-prompt-actions">
+          <button
+            className="pet-prompt-dismiss"
+            type="button"
+            aria-label="关闭提示"
+            onClick={onDismiss}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m4 4 8 8M12 4l-8 8" />
+            </svg>
+          </button>
+        </div>
       </div>
-      <p
-        ref={detailRef}
-        id={PROMPT_DETAIL_ID}
-        className="pet-prompt-detail"
-        aria-hidden={!expanded}
-        onScroll={handleDetailScroll}
-      >
-        {prompt.detail}
-      </p>
       {prompt.tone === "progress" ? (
         <span className="pet-prompt-progress" aria-hidden="true">
           <span />
@@ -313,6 +319,7 @@ export function App(): ReactElement {
   const petButtonRef = useRef<HTMLButtonElement>(null)
   const taskIsActive = useRef(false)
   const responseBuffer = useRef("")
+  const operationResultBuffer = useRef("")
   const currentPetState = PET_STATE_CONFIG[petState]
 
   useEffect(() => {
@@ -361,6 +368,10 @@ export function App(): ReactElement {
     if (expanded && showInput) inputRef.current?.focus()
   }, [expanded, showInput])
 
+  useEffect(() => {
+    void window.pingo?.pet.setDetailExpanded(promptExpanded)
+  }, [promptExpanded])
+
   const closeDialog = useCallback((restorePetFocus = true) => {
     setExpanded(false)
     setPromptExpanded(false)
@@ -369,14 +380,21 @@ export function App(): ReactElement {
   }, [])
 
   useEffect(() => {
-    const handleWindowBlur = () => closeDialog(false)
-    window.addEventListener("blur", handleWindowBlur)
-    return () => window.removeEventListener("blur", handleWindowBlur)
-  }, [closeDialog])
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || !expanded) return
+      event.preventDefault()
+      closeDialog()
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [closeDialog, expanded])
 
-  const showPrompt = useCallback((nextPrompt: PetPrompt | null) => {
+  const showPrompt = useCallback((nextPrompt: PetPrompt | null, reveal = false) => {
     setPrompt(nextPrompt)
     setPromptExpanded(false)
+    if (!reveal) return
+    setExpanded(true)
+    void window.pingo?.pet.setExpanded(true)
   }, [])
 
   const openDialog = useCallback(() => {
@@ -391,12 +409,12 @@ export function App(): ReactElement {
       if (!taskIsActive.current) return
       if (event.type === "start") {
         responseBuffer.current = ""
+        operationResultBuffer.current = ""
         setIsSending(true)
         showPrompt({
           tone: "progress",
           label: "分析中",
-          title: "正在处理你的任务",
-          detail: "正在理解目标并确定下一步。",
+          content: "正在理解目标并确定下一步。",
         })
         showPetState("thinking")
         return
@@ -411,6 +429,7 @@ export function App(): ReactElement {
           (event.toolNames?.length
             ? `正在使用：${event.toolNames.join("、")}`
             : "Pingo 正在继续处理。")
+        const content = detail === event.title ? event.title : `${event.title}\n${detail}`
         showPrompt({
           tone:
             event.status === "failed"
@@ -424,8 +443,8 @@ export function App(): ReactElement {
               : event.phase === "awaiting_approval"
                 ? "需要注意"
                 : "处理中",
-          title: event.title,
-          detail,
+          content,
+          expandable: event.status === "failed",
         })
         return
       }
@@ -439,14 +458,13 @@ export function App(): ReactElement {
             ? {
                 tone: "warning",
                 label: "需要处理",
-                title: "无法读取项目目录",
-                detail: `${event.detail}\n请检查项目目录后再试。`,
+                content: `无法读取项目目录。\n${event.detail}\n请检查项目目录后再试。`,
+                expandable: true,
               }
             : {
                 tone: "progress",
                 label: "工具运行中",
-                title: `正在使用 ${event.name}`,
-                detail: event.detail || "工具正在执行。",
+                content: event.detail || `正在使用 ${event.name}。`,
               },
         )
         return
@@ -454,9 +472,8 @@ export function App(): ReactElement {
       if (event.type === "operation-progress") {
         showPrompt({
           tone: "progress",
-          label: "命令运行中",
-          title: "正在运行命令",
-          detail: event.stream === "stderr" ? "正在检查命令反馈。" : "命令正在执行。",
+          label: "执行中",
+          content: event.stream === "stderr" ? "正在检查命令反馈。" : "命令正在执行。",
         })
         return
       }
@@ -465,38 +482,40 @@ export function App(): ReactElement {
         return
       }
       if (event.type === "operation-result") {
-        const operationCompleted = event.result.status === "completed"
-        showPrompt({
-          tone: operationCompleted ? "success" : "error",
-          label: operationCompleted ? "操作完成" : "操作失败",
-          title: event.result.status === "completed" ? "操作已完成" : "操作未完成",
-          detail:
-            event.result.content ||
-            event.result.detail ||
-            (operationCompleted ? "操作已安全完成。" : "请检查权限或调整任务后重试。"),
-        })
+        const operationResult = event.result.content || event.result.detail
+        if (operationResult) operationResultBuffer.current = operationResult
+        if (event.result.status !== "completed") {
+          showPrompt({
+            tone: "error",
+            label: "操作未完成",
+            content: operationResult || "未能完成当前操作。请检查权限或调整任务后再试一次。",
+            expandable: true,
+          })
+        }
         return
       }
       if (event.type === "done" || event.type === "cancelled" || event.type === "error") {
         taskIsActive.current = false
         setIsSending(false)
+        const finalResult = responseBuffer.current.trim() || operationResultBuffer.current.trim()
         showPrompt(
           event.type === "done"
             ? {
                 tone: "success",
                 label: "已完成",
-                title: "任务已完成",
-                detail: responseBuffer.current.trim() || "任务已完成。",
+                content: finalResult || "请求已处理完毕，暂未返回额外说明。",
+                expandable: true,
               }
             : {
                 tone: event.type === "error" ? "error" : "neutral",
-                label: event.type === "error" ? "执行失败" : "已取消",
-                title: "任务未完成",
-                detail:
+                label: event.type === "error" ? "未完成" : "已取消",
+                content:
                   event.type === "error"
                     ? `${event.message}\n请检查设置或调整任务后再试。`
                     : "任务已取消，没有继续执行操作。你可以随时重新开始。",
+                expandable: true,
               },
+          true,
         )
         showPetState(event.type === "done" ? "happy" : "worried", HAPPY_STATE_DURATION_MS)
       }
@@ -518,14 +537,14 @@ export function App(): ReactElement {
 
       taskIsActive.current = true
       responseBuffer.current = ""
+      operationResultBuffer.current = ""
       setDraft("")
       setIsSending(true)
       setShowInput(false)
       showPrompt({
         tone: "progress",
         label: "新任务",
-        title: content,
-        detail: "已收到任务，正在开始处理。",
+        content: `正在处理：${content}`,
       })
       showPetState("thinking")
 
@@ -533,12 +552,15 @@ export function App(): ReactElement {
         if (!taskIsActive.current) return
         taskIsActive.current = false
         setIsSending(false)
-        showPrompt({
-          tone: "error",
-          label: "无法开始",
-          title: "暂时无法开始任务",
-          detail: "请检查模型设置与网络连接，然后再试一次。",
-        })
+        showPrompt(
+          {
+            tone: "error",
+            label: "无法开始",
+            content: "暂时无法开始任务。请检查模型设置与网络连接，然后再试一次。",
+            expandable: true,
+          },
+          true,
+        )
         showPetState("worried", HAPPY_STATE_DURATION_MS)
       })
     },
@@ -547,15 +569,12 @@ export function App(): ReactElement {
 
   const handleDraftKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Escape") {
-        event.preventDefault()
-        closeDialog()
-      } else if (event.key === "Enter") {
+      if (event.key === "Enter") {
         event.preventDefault()
         submitMessage()
       }
     },
-    [closeDialog, submitMessage],
+    [submitMessage],
   )
 
   const handlePointerDown = useCallback((event: PointerEvent<HTMLButtonElement>) => {
@@ -630,6 +649,7 @@ export function App(): ReactElement {
               prompt={prompt}
               expanded={promptExpanded}
               onToggle={() => setPromptExpanded((current) => !current)}
+              onDismiss={() => closeDialog()}
             />
           )}
           {showInput && (

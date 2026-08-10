@@ -457,6 +457,7 @@ export interface PingoAPI {
   version: string
   pet: {
     setExpanded: (expanded: boolean) => Promise<void>
+    setDetailExpanded: (expanded: boolean) => Promise<void>
     showContextMenu: () => void
     dragStart: (screenX: number, screenY: number) => void
     dragMove: (screenX: number, screenY: number) => void
