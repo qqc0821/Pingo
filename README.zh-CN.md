@@ -6,7 +6,13 @@
   <strong>一个常驻桌面、会记住上下文、会调用工具并真正把事情做完的 AI 伙伴。</strong>
 </p>
 
-![Pingo 把一句请求变成调用工具完成项目任务的闭环](docs/pingo-agent-demo-zh-CN.gif)
+<p align="center">
+  <img
+    src="src/assets/pingo-agent-demo-zh-CN.gif"
+    alt="Pingo 把一句请求变成调用工具完成项目任务的闭环"
+    width="800"
+  />
+</p>
 
 <p align="center">
   <sub>说出目标 → 检查项目 → 调用工具 → 给出结果 → 记住下一步。</sub>

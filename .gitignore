@@ -1,9 +1,7 @@
 node_modules/
 out/
 dist/
-docs/*
-!docs/pingo-agent-demo-en.gif
-!docs/pingo-agent-demo-zh-CN.gif
+docs/
 .vite/
 output/
 .DS_Store
