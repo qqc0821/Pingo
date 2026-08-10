@@ -6,7 +6,13 @@
   <strong>A persistent desktop AI companion that remembers, uses tools, and actually gets things done.</strong>
 </p>
 
-![Pingo turns a request into a tool-using project workflow](docs/pingo-agent-demo-en.gif)
+<p align="center">
+  <img
+    src="src/assets/pingo-agent-demo-en.gif"
+    alt="Pingo turns a request into a tool-using project workflow"
+    width="800"
+  />
+</p>
 
 <p align="center">
   <sub>Ask once → inspect the project → use tools → return a result → keep the next step in context.</sub>
