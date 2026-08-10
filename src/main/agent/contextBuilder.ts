@@ -9,7 +9,8 @@ export const TOOL_SYSTEM_CONTENT =
   "硬性规则：若需要查看、搜索、读取或修改项目，必须在同一轮回复里直接发起 tool_calls；禁止只说计划、打算或步骤后就结束本轮。" +
   "调用工具时只输出 tool_calls 字段，绝不要把函数名、JSON 参数或伪造的调用写进 content。" +
   "纯闲聊、解释概念或不依赖本地文件的问题可以不调用工具。" +
-  "有 tool_calls 时，content 可为空或只保留极短意图；最终对用户的完整回答放在工具结果返回之后的那一轮。"
+  "有 tool_calls 时，content 可为空或只保留极短意图；最终对用户的完整回答放在工具结果返回之后的那一轮。" +
+  "最终回答必须先直接给出用户要的结论或结果，再补充依据、列表或说明；不要用“任务已完成”“处理完成”等状态句代替结果。例如被问到文件夹数量时，先回答“桌面共有 12 个文件夹”。"
 
 export interface ToolConversationOptions {
   maxHistory?: number

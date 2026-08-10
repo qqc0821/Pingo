@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "format:check": "prettier --check 'src/**/*.{ts,tsx,css,scss,html}' electron.vite.config.ts eslint.config.js '*.json'",
     "test": "tsx --test tests/*.test.ts",
+    "harness": "tsx --test tests/agent-harness.test.ts",
     "test:directory": "tsx --test tests/inspect-directory.test.ts",
     "test:ai-terminal": "tsx scripts/ai-terminal-directory.ts",
     "agent": "tsx scripts/mini-agent.ts",

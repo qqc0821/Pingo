@@ -189,13 +189,18 @@ button {
 }
 
 .pet-prompt-header {
-  display: flex;
+  display: grid;
   min-width: 0;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-start;
+  grid-template-areas:
+    "icon message actions"
+    "icon toggle actions";
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  column-gap: 10px;
 }
 
 .pet-prompt-icon {
+  grid-area: icon;
   display: grid;
   width: 34px;
   height: 34px;
@@ -226,15 +231,14 @@ button {
 }
 
 .pet-prompt-heading {
-  display: flex;
+  grid-area: message;
   min-width: 0;
-  flex: 1;
-  align-items: baseline;
-  gap: 5px;
+  padding-top: 1px;
 }
 
 .pet-prompt-label {
-  flex: 0 0 auto;
+  display: block;
+  margin-bottom: 2px;
   color: var(--prompt-accent);
   font-size: 10px;
   font-weight: 700;
@@ -242,27 +246,20 @@ button {
   line-height: 1.2;
 }
 
-.pet-prompt-heading strong {
-  overflow: hidden;
+.pet-prompt-content {
+  display: -webkit-box;
   min-width: 0;
-  flex: 1;
+  margin: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-size: 13px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pet-prompt-detail {
-  display: none;
-  min-width: 0;
-  margin: 8px 0 0 44px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.5;
+  font-weight: 600;
+  line-height: 1.45;
   overflow-wrap: anywhere;
   text-wrap: pretty;
-  white-space: pre-wrap;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .pet-prompt--expanded {
@@ -270,42 +267,43 @@ button {
 }
 
 .pet-prompt--expanded .pet-prompt-header {
-  align-items: flex-start;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-areas:
+    "icon toggle actions"
+    "message message message";
+  grid-template-rows: auto minmax(0, 1fr);
+  row-gap: 14px;
 }
 
 .pet-prompt--expanded .pet-prompt-heading {
-  align-items: flex-start;
+  display: flex;
+  min-height: 0;
   flex-direction: column;
-  gap: 2px;
-  padding-top: 1px;
+  padding-top: 0;
 }
 
-.pet-prompt--expanded .pet-prompt-heading strong {
-  display: block;
-  overflow: hidden;
-  font-size: 14px;
-  overflow-wrap: anywhere;
-  text-wrap: balance;
-  text-overflow: clip;
-  white-space: normal;
-}
-
-.pet-prompt--expanded .pet-prompt-detail {
+.pet-prompt--expanded .pet-prompt-content {
   display: block;
   min-height: 0;
-  max-height: none;
   flex: 1 1 auto;
   overflow-y: auto;
   padding: 0 5px 22px 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+  white-space: pre-wrap;
+  -webkit-line-clamp: unset;
 }
 
-.pet-prompt--detail-overflow::after {
+.pet-prompt--content-overflow::after {
   position: absolute;
   right: 14px;
   bottom: 11px;
-  left: 56px;
+  left: 14px;
   z-index: 1;
   height: 26px;
   pointer-events: none;
@@ -314,6 +312,7 @@ button {
 }
 
 .pet-prompt-toggle {
+  grid-area: toggle;
   display: inline-flex;
   min-height: 32px;
   flex: 0 0 auto;
@@ -326,6 +325,19 @@ button {
   cursor: pointer;
   font-size: 11px;
   font-weight: 650;
+  justify-self: start;
+}
+
+.pet-prompt--expanded .pet-prompt-toggle {
+  justify-self: end;
+}
+
+.pet-prompt-actions {
+  grid-area: actions;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
 }
 
 .pet-prompt-toggle:hover {
@@ -335,6 +347,36 @@ button {
 .pet-prompt-toggle:focus-visible {
   outline: 2px solid var(--prompt-accent);
   outline-offset: 1px;
+}
+
+.pet-prompt-dismiss {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--prompt-accent);
+  cursor: pointer;
+}
+
+.pet-prompt-dismiss:hover {
+  background: var(--prompt-icon-surface);
+}
+
+.pet-prompt-dismiss:focus-visible {
+  outline: 2px solid var(--prompt-accent);
+  outline-offset: 1px;
+}
+
+.pet-prompt-dismiss svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.8;
 }
 
 .pet-prompt-toggle svg {

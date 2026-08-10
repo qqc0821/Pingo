@@ -25,6 +25,13 @@ test("未授权时不注入任何绝对路径", () => {
   assert.doesNotMatch(String(conversation.at(0)?.content), /\/Users\/demo/)
 })
 
+test("system 上下文要求最终回答先展示直接结果", () => {
+  const conversation = buildToolConversation([{ role: "user", content: "桌面有多少个文件夹" }])
+
+  assert.match(String(conversation.at(0)?.content), /先直接给出用户要的结论或结果/)
+  assert.match(String(conversation.at(0)?.content), /不要用“任务已完成”“处理完成”等状态句代替结果/)
+})
+
 test("无 toolCalls 时直接结束并发出最终内容和步骤", async () => {
   const events: ChatStreamEvent[] = []
   const client = {
@@ -196,7 +203,8 @@ test("超出工具循环预算时发出友好错误", async () => {
 
   assert.ok(
     events.some(
-      (event) => event.type === "error" && event.message === "模型连续请求工具次数过多，已停止本次对话。",
+      (event) =>
+        event.type === "error" && event.message === "模型连续请求工具次数过多，已停止本次对话。",
     ),
   )
 })
@@ -238,7 +246,9 @@ test("单轮观察预算耗尽时省略后续内容并发出步骤", async () =>
 
   await orchestrator.run([{ role: "user", content: "read" }])
 
-  assert.ok(events.some((event) => event.type === "agent-step" && event.phase === "budget_exceeded"))
+  assert.ok(
+    events.some((event) => event.type === "agent-step" && event.phase === "budget_exceeded"),
+  )
 })
 
 test("有 toolCalls 时中间 content 不进入聊天气泡", async () => {

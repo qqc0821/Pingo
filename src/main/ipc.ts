@@ -20,6 +20,7 @@ import {
   endDrag,
   getPetWindow,
   moveDrag,
+  setPetDetailExpanded,
   setPetExpanded,
   setPetPreferences,
 } from "./window.js"
@@ -48,11 +49,17 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     setPetExpanded(value)
   })
 
+  ipcMain.handle("pet:set-detail-expanded", (event, value: unknown) => {
+    assertTrustedSender(event.sender)
+    if (typeof value !== "boolean") throw new TypeError("detail expanded must be a boolean")
+    setPetDetailExpanded(value)
+  })
+
   ipcMain.on("pet:show-context-menu", (event) => {
     const owner = getPetWindow()
     if (!owner || owner.webContents !== event.sender) return
 
-    Menu.buildFromTemplate([{ label: "关闭 Pingo", click: () => app.quit() }]).popup({
+    Menu.buildFromTemplate([{ label: "关闭宠物", click: () => app.quit() }]).popup({
       window: owner,
     })
   })

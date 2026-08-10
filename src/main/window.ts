@@ -11,6 +11,7 @@ import type { SettingsStore } from "./store.js"
 
 export const COLLAPSED_SIZE = { width: 132, height: 132 }
 export const EXPANDED_SIZE = { width: 392, height: 312 }
+export const DETAIL_EXPANDED_SIZE = { width: 464, height: 520 }
 
 const EDGE_SNAP_DISTANCE = 24
 const WINDOW_MARGIN = 16
@@ -18,6 +19,7 @@ const WINDOW_MARGIN = 16
 let petWindow: BrowserWindow | null = null
 let settingsStore: SettingsStore | null = null
 let expanded = false
+let detailExpanded = false
 
 interface DragSession {
   startMouseX: number
@@ -39,8 +41,8 @@ export function createPetWindow(store: SettingsStore): BrowserWindow {
     height: COLLAPSED_SIZE.height,
     minWidth: COLLAPSED_SIZE.width,
     minHeight: COLLAPSED_SIZE.height,
-    maxWidth: EXPANDED_SIZE.width,
-    maxHeight: EXPANDED_SIZE.height,
+    maxWidth: DETAIL_EXPANDED_SIZE.width,
+    maxHeight: DETAIL_EXPANDED_SIZE.height,
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -77,6 +79,8 @@ export function createPetWindow(store: SettingsStore): BrowserWindow {
   petWindow.on("closed", () => {
     petWindow = null
     dragSession = null
+    expanded = false
+    detailExpanded = false
   })
   petWindow.once("ready-to-show", () => {
     const currentPreferences = store.getPreferences()
@@ -113,7 +117,11 @@ export function getPetWindow(): BrowserWindow | null {
 
 export function setPetExpanded(nextExpanded: boolean): void {
   const window = petWindow
-  if (!window || expanded === nextExpanded) return
+  if (!window) return
+  if (expanded === nextExpanded) {
+    if (nextExpanded && detailExpanded) setPetDetailExpanded(false)
+    return
+  }
 
   const currentBounds = window.getBounds()
   const anchor = getAnchorPosition(currentBounds)
@@ -123,7 +131,22 @@ export function setPetExpanded(nextExpanded: boolean): void {
     : getSafePosition(anchor, size)
 
   expanded = nextExpanded
+  detailExpanded = false
   window.setBounds({ ...nextPosition, ...size }, false)
+  persistAnchorPosition()
+  sendWindowState()
+}
+
+export function setPetDetailExpanded(nextExpanded: boolean): void {
+  const window = petWindow
+  if (!window || !expanded || detailExpanded === nextExpanded) return
+
+  const currentBounds = window.getBounds()
+  const anchor = getAnchorPosition(currentBounds)
+  const size = nextExpanded ? DETAIL_EXPANDED_SIZE : EXPANDED_SIZE
+
+  detailExpanded = nextExpanded
+  window.setBounds({ ...getExpandedPosition(anchor, size), ...size }, false)
   persistAnchorPosition()
   sendWindowState()
 }
@@ -183,8 +206,8 @@ export function setPetPreferences(scale: number, opacity: number): void {
 
 function getAnchorPosition(bounds: Electron.Rectangle): WindowPosition {
   return {
-    x: expanded ? bounds.x + EXPANDED_SIZE.width - COLLAPSED_SIZE.width : bounds.x,
-    y: expanded ? bounds.y + EXPANDED_SIZE.height - COLLAPSED_SIZE.height : bounds.y,
+    x: expanded ? bounds.x + bounds.width - COLLAPSED_SIZE.width : bounds.x,
+    y: expanded ? bounds.y + bounds.height - COLLAPSED_SIZE.height : bounds.y,
   }
 }
 
@@ -194,8 +217,8 @@ function getExpandedPosition(
 ): WindowPosition {
   return getSafePosition(
     {
-      x: anchor.x - (EXPANDED_SIZE.width - COLLAPSED_SIZE.width),
-      y: anchor.y - (EXPANDED_SIZE.height - COLLAPSED_SIZE.height),
+      x: anchor.x - (size.width - COLLAPSED_SIZE.width),
+      y: anchor.y - (size.height - COLLAPSED_SIZE.height),
     },
     size,
   )

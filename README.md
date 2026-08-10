@@ -2,20 +2,38 @@
 
 [中文](./README.zh-CN.md) | **English**
 
-Pingo is a macOS-only Electron desktop companion: an AI pet with its own personality that lives on your screen edge, chats with you, and helps with day-to-day tasks. It reads and edits files inside your chosen project directory under a strict approval model, so it feels helpful without acting like an open terminal.
+<p align="center">
+  <strong>A persistent desktop AI companion that remembers, uses tools, and actually gets things done.</strong>
+</p>
 
-> MVP status: the app is a working early version. Chat context lives in memory only and starts fresh on every launch.
+![Pingo turns a request into a tool-using project workflow](docs/pingo-agent-demo-en.gif)
 
-## Features
+<p align="center">
+  <sub>Ask once → inspect the project → use tools → return a result → keep the next step in context.</sub>
+</p>
 
-- **Living pet** — idle video animation plus happy/thinking/gentle states, draggable on screen, tray support.
-- **Project assistant** — structured file tools (`list_files`, `search_files`, `read_file`, `write_file`, `apply_patch`, move/trash) scoped to the directory you authorize.
-- **Approval-first security** — every write and terminal command is planned in the main process, risk-classified (R0–R4), and confirmed one at a time with an operation preview. Nothing runs silently.
-- **Trusted Workspace** — optionally mark one directory as trusted so its structured file operations skip repeated confirmation across restarts (terminal commands still confirm).
-- **Intent whitelist terminal** — only structured `executable + args` intents (read-only git, project quality scripts) can run; `shell: false`, sandboxed on macOS via Seatbelt, no shell/interpreters/sudo/network.
-- **Audit & undo** — every operation is logged to a redacted JSONL audit trail (0600); destructive file changes can be recovered from a trash-style undo.
-- **Terminal run history** — browse past runs, re-run, and diff outputs.
-- **Configurable model** — DeepSeek by default; any Chat Completions-compatible endpoint and model name can be set in the settings page.
+## One sentence in. A complete loop out.
+
+Ask Pingo, “What’s still unfinished in my project today?” It can inspect Git status, read project tasks, call workspace-scoped tools, summarize what remains, and carry the next step forward—all from the companion already living on your desktop.
+
+> **Cute gets your attention. Agentic earns its place.**
+
+Pingo is not a chat window wearing a pet costume. The pet is the always-available interface to an agent that can understand your project, take visible actions, and help close the loop.
+
+> **MVP status:** Pingo is a working early version for macOS. The storyboard above previews the product workflow using Pingo's current visual assets. Conversation context is remembered during the current app session and starts fresh after relaunch; cross-launch memory is not available yet.
+
+## What Pingo can do
+
+- **Stay present** — a draggable, animated desktop companion with idle, happy, thinking, and gentle states, plus tray controls.
+- **Understand your workspace** — list, search, and read project files inside the directory you authorize.
+- **Act through tools** — write and patch files, move items to recoverable trash, inspect Git, and run approved project quality scripts.
+- **Keep you in control** — risky actions are classified, previewed, and confirmed individually; nothing executes silently.
+- **Close the loop** — follow task progress, inspect results, revisit terminal history, re-run operations, and compare outputs.
+- **Use your model** — DeepSeek is the default, and any Chat Completions-compatible endpoint and model can be configured.
+
+### Built for useful autonomy—not unrestricted access
+
+Pingo combines workspace-scoped file tools, an intent-whitelisted terminal, macOS Seatbelt sandboxing, redacted audit logs, and recoverable destructive changes. A Trusted Workspace can reduce repeated file confirmations, while terminal commands still require approval.
 
 ## Architecture
 
