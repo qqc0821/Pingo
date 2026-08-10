@@ -92,6 +92,18 @@ npm run test:ai-terminal -- --allow-no-terminal --prompt "简单介绍一下当�
 
 测试用例详见：[ai-terminal-directory.ts](scripts/ai-terminal-directory.ts)。
 
+### Agent Harness（离线回放）
+
+Agent Harness 用固定的模型响应驱动真实的 `AgentOrchestrator`，所以不需要 API Key、网络或桌面界面，也不会读取或修改当前项目。它验证最终回答之外的行为轨迹：模型调用次数、工具调用与参数、步骤事件、取消和工具循环上限。
+
+```bash
+npm run harness
+```
+
+场景位于 `tests/agent-harness.test.ts`，通用回放 Runner 位于 `tests/harness/agentHarness.ts`。新增场景时，为每一轮写入一个有名称的 `modelSteps` 响应，并断言结构化轨迹或最终状态；不要把整段自然语言回答做为唯一断言。真实的权限 token、文件操作和 Terminal 沙箱链路继续由 `task-manager`、`security` 和 `terminal-security` 测试覆盖。
+
+Harness 是确定性回归测试，不替代真实模型的端到端评估；后者仍使用 `npm run test:ai-terminal`，应在隔离环境中按需运行。
+
 ## Mini Agent（命令行闭环）
 
 `scripts/mini-agent.ts` 是不依赖应用其它模块的独立 agent，用来在没有界面的情况下验证「模型能否自主调用工具并基于真实文件回答」。它提供 `list_files`、`read_file`、`run_command` 三个工具，需要 `.env` 中的 `MODEL_API_KEY`：
