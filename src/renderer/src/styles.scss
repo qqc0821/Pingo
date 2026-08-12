@@ -42,8 +42,8 @@ $red-700: #b4233b;
   --line-subtle: var(--border-subtle);
   --action-primary: var(--color-neutral-900);
   --action-primary-hover: #000;
-  --focus-ring: #10a37f;
-  --focus-ring-soft: rgb(16 163 127 / 16%);
+  --focus-ring: var(--color-neutral-500);
+  --focus-ring-soft: rgb(102 112 133 / 14%);
   --shadow-raised: 0 8px 18px rgb(15 23 42 / 12%);
   --shadow-prompt: 0 16px 34px rgb(15 23 42 / 14%), 0 2px 8px rgb(15 23 42 / 6%);
   --status-neutral: var(--color-neutral-500);
@@ -195,30 +195,35 @@ button {
   grid-template-areas:
     "icon message actions"
     "icon toggle actions";
-  grid-template-columns: 34px minmax(0, 1fr) auto;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   column-gap: 10px;
 }
 
 .pet-prompt-icon {
   grid-area: icon;
+  position: relative;
   display: grid;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
   place-items: center;
-  border-radius: 11px;
+  border: 1px solid var(--prompt-border);
+  border-radius: 14px;
   background: var(--prompt-icon-surface);
   color: var(--prompt-accent);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 68%),
+    0 3px 8px rgb(15 23 42 / 8%);
 }
 
 .prompt-icon-svg {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.8;
+  stroke-width: 2.2;
 }
 
 .pet-prompt-icon-motion {
@@ -230,6 +235,24 @@ button {
   animation: prompt-icon-turn 1.8s linear infinite;
 }
 
+.pet-prompt--progress .pet-prompt-icon {
+  box-shadow:
+    0 0 0 3px rgb(66 99 235 / 12%),
+    inset 0 0 0 1px rgb(255 255 255 / 68%),
+    0 3px 8px rgb(15 23 42 / 8%);
+}
+
+.pet-prompt--progress .pet-prompt-icon::after {
+  position: absolute;
+  inset: -5px;
+  border: 1.5px solid var(--prompt-accent);
+  border-radius: 18px;
+  content: "";
+  opacity: 0.28;
+  pointer-events: none;
+  animation: prompt-icon-pulse 1.8s ease-out infinite;
+}
+
 .pet-prompt-heading {
   grid-area: message;
   min-width: 0;
@@ -237,13 +260,26 @@ button {
 }
 
 .pet-prompt-label {
-  display: block;
-  margin-bottom: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
   color: var(--prompt-accent);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.02em;
   line-height: 1.2;
+}
+
+.pet-prompt--progress .pet-prompt-label::before {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px rgb(66 99 235 / 12%);
+  content: "";
+  animation: prompt-status-dot 1.4s ease-in-out infinite;
 }
 
 .pet-prompt-content {
@@ -345,7 +381,7 @@ button {
 }
 
 .pet-prompt-toggle:focus-visible {
-  outline: 2px solid var(--prompt-accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -366,7 +402,7 @@ button {
 }
 
 .pet-prompt-dismiss:focus-visible {
-  outline: 2px solid var(--prompt-accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -837,6 +873,16 @@ button {
   opacity: 0.45;
 }
 
+.agent-steps summary:focus-visible,
+.operation-log-link:focus-visible,
+.operation-log-actions button:focus-visible,
+.action-buttons button:focus-visible,
+.result-actions button:focus-visible,
+.grant-row button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .result-actions {
   justify-content: space-between;
   margin: 8px 0 5px;
@@ -957,7 +1003,7 @@ button {
 
 .icon-button:focus-visible,
 .pet-button:focus-visible {
-  outline: 2px solid #10a37f;
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -1549,6 +1595,32 @@ button {
   }
 }
 
+@keyframes prompt-icon-pulse {
+  0% {
+    opacity: 0.34;
+    transform: scale(0.92);
+  }
+
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes prompt-status-dot {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.86);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 @keyframes prompt-progress {
   0% {
     transform: translateX(-120%);
@@ -1566,6 +1638,8 @@ button {
   .loading-ring,
   .pet-prompt,
   .pet-prompt-icon-motion,
+  .pet-prompt--progress .pet-prompt-icon::after,
+  .pet-prompt--progress .pet-prompt-label::before,
   .pet-prompt-progress > span,
   .pet-prompt-toggle svg,
   .pet-dock,

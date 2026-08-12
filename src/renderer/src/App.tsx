@@ -172,7 +172,6 @@ function PromptCard({
   onDismiss: () => void
 }): ReactElement {
   const liveMode = prompt.tone === "error" ? "assertive" : "polite"
-  const showVisualStatusLabel = prompt.tone !== "success" && prompt.tone !== "progress"
   const contentRef = useRef<HTMLParagraphElement>(null)
   const [contentIsClipped, setContentIsClipped] = useState(false)
   const [contentHasScroll, setContentHasScroll] = useState(false)
@@ -222,7 +221,7 @@ function PromptCard({
           </span>
         </span>
         <div className="pet-prompt-heading">
-          {showVisualStatusLabel ? <span className="pet-prompt-label">{prompt.label}</span> : null}
+          <span className="pet-prompt-label">{prompt.label}</span>
           <p
             ref={contentRef}
             id={PROMPT_DETAIL_ID}
