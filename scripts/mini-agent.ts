@@ -265,7 +265,7 @@ function warnIfToolCallLeakedIntoText(content: string): void {
 }
 
 function modelName(): string {
-  return process.env.MODEL_NAME?.trim() || "deepseek-chat"
+  return process.env.MODEL_NAME?.trim() || "deepseek-v4-pro"
 }
 
 function baseUrl(): string {

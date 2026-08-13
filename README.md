@@ -62,7 +62,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Default model is `deepseek-chat`; base URL and model name can be changed in the settings page (any Chat Completions-compatible endpoint works).
+Default model is `deepseek-v4-pro`; base URL and model name can be changed in the settings page (any Chat Completions-compatible endpoint works).
 
 ### Packaged app keys
 

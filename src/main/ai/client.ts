@@ -2,7 +2,7 @@ import type { ChatMessageInput, ChatStreamEvent } from "../../shared/types.js"
 import type { ToolDefinition } from "../tools/types.js"
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com/v1/chat/completions"
-const DEFAULT_MODEL = "deepseek-chat"
+const DEFAULT_MODEL = "deepseek-v4-pro"
 const NETWORK_REQUEST_TIMEOUT_MS = 60_000
 const MAX_HISTORY = 24
 

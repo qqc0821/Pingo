@@ -62,7 +62,7 @@ cp .env.example .env
 npm run dev
 ```
 
-默认模型为 `deepseek-chat`。也可以在设置页修改兼容 Chat Completions 的接口地址和模型名。
+默认模型为 `deepseek-v4-pro`。也可以在设置页修改兼容 Chat Completions 的接口地址和模型名。
 
 ### 打包版的密钥配置
 
