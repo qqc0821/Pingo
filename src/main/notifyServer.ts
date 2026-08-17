@@ -1,9 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
-import { showPetWindow, sendPetNotification } from "./window.js"
-import type { PetNotification } from "../shared/types.js"
+import { showPetWindowInactive, sendPetNotification } from "./window.js"
+import type { PetNotification, PetNotificationKind } from "../shared/types.js"
 
 const DEFAULT_PORT = 8790
 const MAX_BODY_BYTES = 64 * 1024
+const MAX_NOTIFICATION_TEXT = 2000
+const MAX_ID_SOURCE_LENGTH = 64
+const NOTIFICATION_KINDS: PetNotificationKind[] = ["turn", "subagent", "goal", "mcp", "system"]
 
 let server: Server | null = null
 
@@ -67,7 +70,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   }
 
   sendPetNotification(notification)
-  showPetWindow()
+  // 通知只"浮现"窗口,不抢键盘焦点,避免打断用户。
+  showPetWindowInactive()
   sendJson(res, 200, { ok: true, received: notification })
 }
 
@@ -75,16 +79,38 @@ function normalizeNotification(
   body: Record<string, unknown>,
   pathname: string,
 ): PetNotification | null {
-  const text = typeof body.text === "string" ? body.text.slice(0, 2000) : ""
+  const text = typeof body.text === "string" ? body.text.slice(0, MAX_NOTIFICATION_TEXT) : ""
   const mood = isMood(body.mood) ? body.mood : undefined
   const action = isAction(body.action) ? body.action : undefined
+  const id = typeof body.id === "string" ? body.id.slice(0, MAX_ID_SOURCE_LENGTH) : undefined
+  const source =
+    typeof body.source === "string" ? body.source.slice(0, MAX_ID_SOURCE_LENGTH) : undefined
+  const kind = isKind(body.kind) ? body.kind : undefined
+  const expiresInMs =
+    typeof body.expiresInMs === "number" &&
+    Number.isFinite(body.expiresInMs) &&
+    body.expiresInMs > 0
+      ? Math.min(Math.round(body.expiresInMs), 24 * 60 * 60 * 1000)
+      : undefined
 
   // 便捷路径:/mood /animate 只需一个字段。
   if (pathname === "/mood" && mood) return { text, mood }
   if (pathname === "/animate" && action) return { text, action }
 
   if (!text && !mood && !action) return null
-  return { text, ...(mood ? { mood } : {}), ...(action ? { action } : {}) }
+  return {
+    text,
+    ...(mood ? { mood } : {}),
+    ...(action ? { action } : {}),
+    ...(id ? { id } : {}),
+    ...(source ? { source } : {}),
+    ...(kind ? { kind } : {}),
+    ...(expiresInMs !== undefined ? { expiresInMs } : {}),
+  }
+}
+
+function isKind(value: unknown): value is PetNotificationKind {
+  return typeof value === "string" && (NOTIFICATION_KINDS as string[]).includes(value)
 }
 
 function isMood(value: unknown): value is NonNullable<PetNotification["mood"]> {
@@ -116,7 +142,9 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | n
       if (!raw.trim()) return resolve({})
       try {
         const parsed = JSON.parse(raw)
-        resolve(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {})
+        resolve(
+          typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {},
+        )
       } catch {
         resolve(null)
       }

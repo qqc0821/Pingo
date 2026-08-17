@@ -184,6 +184,14 @@ export function showPetWindow(): void {
   petWindow?.focus()
 }
 
+/**
+ * 非侵入式展示:显示窗口但不抢占键盘焦点。
+ * 供外部通知(DSH / MCP)使用,避免每轮回复打断用户正在进行的输入。
+ */
+export function showPetWindowInactive(): void {
+  petWindow?.showInactive()
+}
+
 export function hidePetWindow(): void {
   petWindow?.hide()
 }

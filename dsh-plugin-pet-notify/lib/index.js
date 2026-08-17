@@ -122,13 +122,20 @@ function apply(ctx, config) {
         const kind = event.data?.reason?.kind
         if (kind === "blocked" || kind === "aborted") return
         if (kind === "error") {
-          void push(options.url, { text: "DSH 执行出错了", mood: "sad" })
+          void push(options.url, {
+            text: "DSH 执行出错了",
+            mood: "sad",
+            kind: "turn",
+            source: "dsh:turn/end:error",
+          })
           return
         }
         const reply = summarize(extractLastAssistantText(session))
         void push(options.url, {
           text: reply ? `DSH 回复:${reply}` : "DSH 已完成回复",
           mood: "happy",
+          kind: "turn",
+          source: "dsh:turn/end",
         })
       },
       { global: true },
@@ -142,7 +149,12 @@ function apply(ctx, config) {
         const detail = summarize(extractBlocksText(info?.lastAssistantMessage))
         const stop = info?.stopReason ?? "completed"
         const text = detail ? `子代理完成:${detail}` : `子代理结束(${stop})`
-        void push(options.url, { text, mood: "neutral" })
+        void push(options.url, {
+          text,
+          mood: "neutral",
+          kind: "subagent",
+          source: `dsh:subagent/end:${stop}`,
+        })
       },
       { global: true },
     )
@@ -162,6 +174,8 @@ function apply(ctx, config) {
         void push(options.url, {
           text,
           mood: operation === "blocked" ? "sad" : "neutral",
+          kind: "goal",
+          source: `dsh:goal/${operation}`,
         })
       },
       { global: true },
@@ -172,7 +186,12 @@ function apply(ctx, config) {
     ctx.on(
       "session/created",
       () => {
-        void push(options.url, { text: "新会话已创建", mood: "neutral" })
+        void push(options.url, {
+          text: "新会话已创建",
+          mood: "neutral",
+          kind: "system",
+          source: "dsh:session/created",
+        })
       },
       { global: true },
     )

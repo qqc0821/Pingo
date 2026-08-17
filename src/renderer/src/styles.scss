@@ -122,19 +122,88 @@ button {
 }
 
 .pet-prompt-layer {
+  display: flex;
   min-height: 0;
   flex: 0 1 auto;
+  flex-direction: column;
+  gap: 8px;
   z-index: 20;
 }
 
 .app-shell.prompt-detail-open .pet-prompt-layer {
-  display: flex;
   flex: 1 1 auto;
-  flex-direction: column;
 }
 
-.app-shell.prompt-detail-open .quick-composer {
-  display: none;
+.prompt-stack-toggle {
+  display: inline-flex;
+  min-height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  align-self: center;
+  gap: 4px;
+  padding: 4px 11px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--surface-raised-translucent);
+  box-shadow: var(--shadow-raised);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.prompt-stack-toggle:hover {
+  background: var(--surface-subtle);
+  color: var(--text-primary);
+}
+
+.prompt-stack-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.prompt-stack-toggle svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  transition: transform 160ms ease;
+}
+
+.prompt-stack-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.pet-prompt-stack {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 2px;
+}
+
+.prompt-count-badge {
+  display: inline-grid;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--prompt-accent);
+  color: var(--color-white);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .pet-prompt {
@@ -406,6 +475,28 @@ button {
   outline-offset: 1px;
 }
 
+.pet-prompt-cancel {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--prompt-accent);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.pet-prompt-cancel:hover {
+  background: var(--prompt-icon-surface);
+}
+
+.pet-prompt-cancel:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .pet-prompt-dismiss svg {
   width: 16px;
   height: 16px;
@@ -455,9 +546,44 @@ button {
   margin: 10px 12px 0;
 }
 
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 2px 6px;
+}
+
+.quick-actions button {
+  min-height: 26px;
+  padding: 3px 11px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--surface-raised-translucent);
+  box-shadow: var(--shadow-raised);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    border-color 160ms ease;
+}
+
+.quick-actions button:hover {
+  background: var(--surface-subtle);
+  border-color: var(--focus-ring);
+  color: var(--text-primary);
+}
+
+.quick-actions button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .quick-composer-shell {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   min-height: 44px;
   overflow: hidden;
   border: 1px solid var(--border-default);
@@ -474,25 +600,24 @@ button {
   box-shadow: 0 0 0 3px var(--focus-ring-soft);
 }
 
-.quick-composer input {
+.quick-composer textarea {
+  display: block;
   min-width: 0;
+  max-height: 96px;
   flex: 1;
+  resize: none;
+  overflow-y: auto;
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--text-primary);
   font-size: 12px;
   line-height: 1.4;
-  padding: 10px 8px 10px 12px;
+  padding: 12px 8px 10px 12px;
 }
 
-.quick-composer input::placeholder {
+.quick-composer textarea::placeholder {
   color: var(--text-placeholder);
-}
-
-.quick-composer input:disabled {
-  cursor: wait;
-  opacity: 0.65;
 }
 
 .quick-composer button {
@@ -1642,6 +1767,10 @@ button {
   .pet-prompt--progress .pet-prompt-label::before,
   .pet-prompt-progress > span,
   .pet-prompt-toggle svg,
+  .prompt-stack-toggle,
+  .prompt-stack-toggle svg,
+  .pet-prompt-cancel,
+  .quick-actions button,
   .pet-dock,
   .quick-composer-shell,
   .quick-composer button {
