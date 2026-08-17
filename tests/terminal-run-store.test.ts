@@ -53,6 +53,18 @@ test("terminal run store keeps redacted, bounded in-memory tool history", () => 
     const diff = store.diffTerminalRuns("run-204", "run-diff")
     assert.equal(diff?.different, true)
     assert.equal(diff?.right, "different output")
+
+    const before = store.listTerminalRuns()
+    assert.ok(before.some((run) => run.runId === "run-diff"))
+    assert.equal(before[0]?.runId, "run-diff")
+
+    assert.equal(store.deleteTerminalRun("run-diff"), true)
+    assert.equal(store.deleteTerminalRun("run-diff"), false)
+    assert.equal(store.getTerminalRun("run-diff"), null)
+    assert.equal(
+      store.listTerminalRuns().some((run) => run.runId === "run-diff"),
+      false,
+    )
   } finally {
     store.close()
   }

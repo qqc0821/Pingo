@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron"
 import type {
   ChatStreamEvent,
+  PetNotification,
   PetStateEvent,
   PingoAPI,
   WindowAppearance,
@@ -21,6 +22,7 @@ const api: PingoAPI = {
     onSettingsRequest: (listener) => subscribe("pingo:settings-request", listener),
     onAppearance: (listener) => subscribe("pingo:appearance", listener),
     onStateChange: (listener) => subscribe("pingo:pet-state", listener),
+    onNotification: (listener) => subscribe("pingo:pet-notify", listener),
   },
   project: {
     get: () => ipcRenderer.invoke("project:get"),
@@ -64,6 +66,7 @@ const api: PingoAPI = {
     rerun: (runId) => ipcRenderer.invoke("terminal-runs:rerun", runId),
     diff: (leftRunId, rightRunId) =>
       ipcRenderer.invoke("terminal-runs:diff", { leftRunId, rightRunId }),
+    delete: (runId) => ipcRenderer.invoke("terminal-runs:delete", runId),
   },
 }
 
@@ -75,6 +78,10 @@ function subscribe(
 ): () => void
 function subscribe(channel: "pingo:settings-request", listener: () => void): () => void
 function subscribe(channel: "pingo:pet-state", listener: (event: PetStateEvent) => void): () => void
+function subscribe(
+  channel: "pingo:pet-notify",
+  listener: (notification: PetNotification) => void,
+): () => void
 function subscribe(
   channel: "pingo:appearance",
   listener: (appearance: WindowAppearance) => void,

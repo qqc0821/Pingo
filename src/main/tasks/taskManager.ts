@@ -30,7 +30,9 @@ import {
   TerminalPolicyError,
   terminalFailure,
 } from "../terminal/intentPolicy.js"
-import { TerminalRunner, TerminalRunnerError } from "../terminal/runner.js"
+import { TerminalError } from "../terminal/backend.js"
+import { SeatbeltTerminalBackend, TerminalRunnerError } from "../terminal/seatbeltBackend.js"
+import { TerminalSessionService } from "../terminal/sessionRegistry.js"
 import { getTerminalFeatureFlags, type TerminalFeatureFlags } from "../terminal/featureFlags.js"
 import { executeTool, READ_ONLY_TOOL_NAMES, TOOL_DEFINITIONS } from "../tools/registry.js"
 import { planFileOperation, type PlannedFileOperation } from "../tools/fileOperations.js"
@@ -56,7 +58,7 @@ interface TaskRecord {
   state: TaskState
   cancelled: boolean
   permission?: PermissionWaiter
-  activeTerminalOperationId?: string
+  activeTerminalSessionId?: string
   cancellationPromise?: Promise<void>
 }
 
@@ -72,9 +74,9 @@ export interface TaskManagerDependencies {
   capabilityManager?: CapabilityManager
   approvalBroker?: ApprovalBroker
   auditLogger: AuditLogger
-  terminalRunner?: TerminalRunner
   terminalFeatureFlags?: TerminalFeatureFlags
   terminalTrustManager?: TerminalTrustManager
+  terminalSessionService?: TerminalSessionService
   terminalRunStore?: Pick<TerminalRunStore, "recordTerminalRun" | "getTerminalRun">
 }
 
@@ -82,7 +84,7 @@ export class TaskManager {
   private readonly tasks = new Map<string, TaskRecord>()
   private readonly capabilityManager: CapabilityManager
   private readonly approvalBroker: ApprovalBroker
-  private readonly terminalRunner: TerminalRunner
+  private readonly terminalSessionService: TerminalSessionService
   private readonly terminalFeatureFlags: TerminalFeatureFlags
   private readonly terminalTrustManager: TerminalTrustManager
   private readonly undoManager = new UndoManager()
@@ -90,7 +92,8 @@ export class TaskManager {
   constructor(private readonly dependencies: TaskManagerDependencies) {
     this.capabilityManager = dependencies.capabilityManager ?? new CapabilityManager()
     this.approvalBroker = dependencies.approvalBroker ?? new ApprovalBroker()
-    this.terminalRunner = dependencies.terminalRunner ?? new TerminalRunner()
+    this.terminalSessionService =
+      dependencies.terminalSessionService ?? createDefaultTerminalService()
     this.terminalFeatureFlags = dependencies.terminalFeatureFlags ?? getTerminalFeatureFlags()
     this.terminalTrustManager = dependencies.terminalTrustManager ?? new TerminalTrustManager()
   }
@@ -376,8 +379,12 @@ export class TaskManager {
   private async finishCancellation(task: TaskRecord): Promise<void> {
     if (!task.cancellationPromise) {
       task.cancellationPromise = (async () => {
-        if (task.activeTerminalOperationId) {
-          await this.terminalRunner.cancel(task.taskId, task.activeTerminalOperationId)
+        if (task.activeTerminalSessionId) {
+          await this.terminalSessionService.kill(
+            task.taskId,
+            task.activeTerminalSessionId,
+            "task cancelled",
+          )
         }
         if (!isTerminal(task.state)) {
           this.emitState(task, "cancelled")
@@ -557,13 +564,20 @@ export class TaskManager {
           )
           this.capabilityManager.consume(sessionGrant.grantId)
         }
-        task.activeTerminalOperationId = plan.operationId
+        const spawned = await this.terminalSessionService.spawn(
+          task.taskId,
+          {
+            type: "seatbelt",
+            plan: plan.terminalPlan,
+            onProgress: (event) => task.emit(event),
+          },
+          task.controller.signal,
+        )
+        const sessionId = spawned.snapshot.sessionId
+        task.activeTerminalSessionId = sessionId
         try {
           const startedAt = Date.now()
-          const run = await this.terminalRunner.run(plan.terminalPlan, {
-            signal: task.controller.signal,
-            onProgress: (event) => task.emit(event),
-          })
+          const run = await spawned.operation.done
           const policyFailure = run.cancelled
             ? terminalFailure(
                 "cancelled",
@@ -625,7 +639,10 @@ export class TaskManager {
             policyFailure,
           }
         } finally {
-          task.activeTerminalOperationId = undefined
+          task.activeTerminalSessionId = undefined
+          await this.terminalSessionService
+            .kill(task.taskId, sessionId, "command completed")
+            .catch(() => {})
         }
       },
       options,
@@ -1093,7 +1110,16 @@ function getTerminalFailure(error: unknown): TerminalPolicyFailure {
   if (error instanceof TerminalPolicyError || error instanceof TerminalRunnerError) {
     return error.failure
   }
+  if (error instanceof TerminalError && error.code === "LIMIT_REACHED") {
+    return terminalFailure("command_forbidden", "Terminal 并发数已达上限", true, "ask_user")
+  }
   return terminalFailure("command_forbidden", safeError(error), false, "change_approach")
+}
+
+function createDefaultTerminalService(): TerminalSessionService {
+  const service = new TerminalSessionService()
+  service.registerBackend(new SeatbeltTerminalBackend())
+  return service
 }
 
 function deniedExecution(capability: Capability): { content: string; detail: string } {

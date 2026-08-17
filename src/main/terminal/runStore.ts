@@ -36,6 +36,18 @@ export class TerminalRunStore {
     return run ? { ...run, argv: [...run.argv] } : null
   }
 
+  /** Explicitly remove one run record; idempotent, returns whether it existed. */
+  deleteTerminalRun(runId: string): boolean {
+    return this.runs.delete(runId)
+  }
+
+  /** List every retained run, newest first (publication order reversed). */
+  listTerminalRuns(): TerminalRunRecord[] {
+    return [...this.runs.values()]
+      .sort((left, right) => right.finishedAt - left.finishedAt)
+      .map((run) => ({ ...run, argv: [...run.argv] }))
+  }
+
   searchTerminalRuns(query = "", limit = 50): TerminalRunRecord[] {
     const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)))
     const needle = query.trim().toLocaleLowerCase()

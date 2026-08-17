@@ -1,6 +1,7 @@
 import { BrowserWindow, screen } from "electron"
 import { join } from "node:path"
 import type {
+  PetNotification,
   PetState,
   PetStateEvent,
   WindowAppearance,
@@ -195,6 +196,11 @@ export function sendPetState(state: PetState, durationMs?: number): void {
   if (!petWindow) return
   const event: PetStateEvent = durationMs === undefined ? { state } : { state, durationMs }
   petWindow.webContents.send("pingo:pet-state", event)
+}
+
+export function sendPetNotification(notification: PetNotification): void {
+  if (!petWindow) return
+  petWindow.webContents.send("pingo:pet-notify", notification)
 }
 
 export function setPetPreferences(scale: number, opacity: number): void {

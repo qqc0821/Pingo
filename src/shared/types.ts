@@ -14,6 +14,13 @@ export interface PetStateEvent {
   state: PetState
   durationMs?: number
 }
+
+/** 外部(DSH / MCP)推送的一条宠物通知。 */
+export interface PetNotification {
+  text: string
+  mood?: "happy" | "sad" | "excited" | "sleepy" | "angry" | "neutral"
+  action?: "dance" | "wave" | "jump" | "sleep" | "idle"
+}
 export type ChatMessageRole = "user" | "assistant" | "system"
 
 export interface ChatMessageInput {
@@ -466,6 +473,7 @@ export interface PingoAPI {
     onSettingsRequest: (listener: () => void) => () => void
     onAppearance: (listener: (appearance: WindowAppearance) => void) => () => void
     onStateChange: (listener: (event: PetStateEvent) => void) => () => void
+    onNotification: (listener: (notification: PetNotification) => void) => () => void
   }
   project: {
     get: () => Promise<ProjectInfo | null>
@@ -510,5 +518,6 @@ export interface PingoAPI {
       leftRunId: string,
       rightRunId: string,
     ) => Promise<{ left: string; right: string; different: boolean } | null>
+    delete: (runId: string) => Promise<boolean>
   }
 }

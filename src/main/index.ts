@@ -2,6 +2,7 @@ import { app, BrowserWindow } from "electron"
 import { join } from "node:path"
 import { loadDotEnv } from "./env.js"
 import { registerIpcHandlers } from "./ipc.js"
+import { startNotifyServer, stopNotifyServer } from "./notifyServer.js"
 import { SettingsStore } from "./store.js"
 import { createTray } from "./tray.js"
 import { createPetWindow } from "./window.js"
@@ -24,6 +25,7 @@ app.whenReady().then(() => {
   registerIpcHandlers(store)
   createPetWindow(store)
   createTray()
+  startNotifyServer()
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createPetWindow(store)
@@ -32,4 +34,8 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit()
+})
+
+app.on("will-quit", () => {
+  stopNotifyServer()
 })

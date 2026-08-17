@@ -11,7 +11,7 @@ import petGentleImage from "../../assets/pet-gentle.png"
 import petImage from "../../assets/pet.png"
 import petHappyImage from "../../assets/pet-happy.png"
 import petThinkingImage from "../../assets/pet-thinking.png"
-import type { ChatStreamEvent, PetState, TaskState } from "../../shared/types.js"
+import type { ChatStreamEvent, PetNotification, PetState, TaskState } from "../../shared/types.js"
 
 type PetImageKey = "idle" | "happy" | "thinking" | "gentle"
 type PromptTone = "neutral" | "progress" | "success" | "warning" | "error"
@@ -287,6 +287,32 @@ const PET_STATE_CONFIG: Record<PetState, { image: PetImageKey; label: string }> 
   celebrate: { image: "happy", label: "庆祝" },
 }
 
+const NOTIFICATION_MOOD_TONE: Record<NonNullable<PetNotification["mood"]>, PromptTone> = {
+  happy: "success",
+  excited: "success",
+  sad: "error",
+  angry: "error",
+  sleepy: "neutral",
+  neutral: "neutral",
+}
+
+const NOTIFICATION_MOOD_STATE: Record<NonNullable<PetNotification["mood"]>, PetState> = {
+  happy: "happy",
+  excited: "celebrate",
+  sad: "worried",
+  angry: "worried",
+  sleepy: "sleepy",
+  neutral: "nod",
+}
+
+const NOTIFICATION_ACTION_STATE: Record<NonNullable<PetNotification["action"]>, PetState> = {
+  dance: "celebrate",
+  wave: "happy",
+  jump: "celebrate",
+  sleep: "sleepy",
+  idle: "idle",
+}
+
 export function App(): ReactElement {
   const [previewPrompt] = useState(readPromptPreview)
   const [expanded, setExpanded] = useState(() => previewPrompt !== null)
@@ -395,6 +421,30 @@ export function App(): ReactElement {
     setExpanded(true)
     void window.pingo?.pet.setExpanded(true)
   }, [])
+
+  useEffect(() => {
+    const api = window.pingo
+    if (!api) return
+    return api.pet.onNotification((notification) => {
+      const state = notification.action
+        ? NOTIFICATION_ACTION_STATE[notification.action]
+        : notification.mood
+          ? NOTIFICATION_MOOD_STATE[notification.mood]
+          : "happy"
+      if (notification.text) {
+        showPrompt(
+          {
+            tone: notification.mood ? NOTIFICATION_MOOD_TONE[notification.mood] : "neutral",
+            label: "新通知",
+            content: notification.text,
+            expandable: notification.text.length > 120,
+          },
+          true,
+        )
+      }
+      showPetState(state, HAPPY_STATE_DURATION_MS)
+    })
+  }, [showPrompt, showPetState])
 
   const openDialog = useCallback(() => {
     setExpanded(true)

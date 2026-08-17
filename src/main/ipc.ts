@@ -13,6 +13,8 @@ import type {
 import type { SettingsStore } from "./store.js"
 import { AuditLogger } from "./security/auditLogger.js"
 import { TerminalRunStore } from "./terminal/runStore.js"
+import { SeatbeltTerminalBackend } from "./terminal/seatbeltBackend.js"
+import { TerminalSessionService } from "./terminal/sessionRegistry.js"
 import { getRealProjectRoot, isSensitiveRelativePath } from "./security/pathGuard.js"
 import { TaskManager } from "./tasks/taskManager.js"
 import {
@@ -28,9 +30,12 @@ import {
 export function registerIpcHandlers(settingsStore: SettingsStore): void {
   const auditLogger = new AuditLogger(join(app.getPath("userData"), "operation-history.jsonl"))
   const terminalRunStore = new TerminalRunStore()
+  const terminalSessionService = new TerminalSessionService()
+  terminalSessionService.registerBackend(new SeatbeltTerminalBackend())
   const taskManager = new TaskManager({
     settingsStore,
     auditLogger,
+    terminalSessionService,
     terminalRunStore,
     skipUserConfirmation: true,
   })
@@ -41,7 +46,10 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     })
   })
 
-  app.once("will-quit", () => terminalRunStore.close())
+  app.once("will-quit", () => {
+    void terminalSessionService.disposeAll()
+    terminalRunStore.close()
+  })
 
   ipcMain.handle("pet:set-expanded", (event, value: unknown) => {
     assertTrustedSender(event.sender)
@@ -312,6 +320,12 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
       throw new TypeError("运行对比参数无效")
     }
     return terminalRunStore.diffTerminalRuns(candidate.leftRunId, candidate.rightRunId)
+  })
+
+  ipcMain.handle("terminal-runs:delete", (event, value: unknown) => {
+    assertTrustedSender(event.sender)
+    if (typeof value !== "string" || value.length > 120) throw new TypeError("运行记录 ID 无效")
+    return terminalRunStore.deleteTerminalRun(value)
   })
 
   ipcMain.handle("audit:list", (event) => {
