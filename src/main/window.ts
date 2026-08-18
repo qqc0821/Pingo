@@ -2,17 +2,16 @@ import { BrowserWindow, screen } from "electron"
 import { join } from "node:path"
 import type {
   PetNotification,
-  PetState,
-  PetStateEvent,
   WindowAppearance,
   WindowPosition,
   WindowState,
 } from "../shared/types.js"
 import type { SettingsStore } from "./store.js"
 
-export const COLLAPSED_SIZE = { width: 132, height: 132 }
-export const EXPANDED_SIZE = { width: 392, height: 312 }
-export const DETAIL_EXPANDED_SIZE = { width: 464, height: 520 }
+/** 宠物下方预留 38px，完整容纳消息按钮与焦点环。 */
+export const COLLAPSED_SIZE = { width: 132, height: 170 }
+export const EXPANDED_SIZE = { width: 392, height: 350 }
+export const DETAIL_EXPANDED_SIZE = { width: 464, height: 558 }
 
 const EDGE_SNAP_DISTANCE = 24
 const WINDOW_MARGIN = 16
@@ -119,10 +118,7 @@ export function getPetWindow(): BrowserWindow | null {
 export function setPetExpanded(nextExpanded: boolean): void {
   const window = petWindow
   if (!window) return
-  if (expanded === nextExpanded) {
-    if (nextExpanded && detailExpanded) setPetDetailExpanded(false)
-    return
-  }
+  if (expanded === nextExpanded) return
 
   const currentBounds = window.getBounds()
   const anchor = getAnchorPosition(currentBounds)
@@ -198,12 +194,6 @@ export function hidePetWindow(): void {
 
 export function sendSettingsRequest(): void {
   petWindow?.webContents.send("pingo:settings-request")
-}
-
-export function sendPetState(state: PetState, durationMs?: number): void {
-  if (!petWindow) return
-  const event: PetStateEvent = durationMs === undefined ? { state } : { state, durationMs }
-  petWindow.webContents.send("pingo:pet-state", event)
 }
 
 export function sendPetNotification(notification: PetNotification): void {

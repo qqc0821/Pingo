@@ -94,16 +94,6 @@ export function resolveProjectTarget(projectPath: string, requestedPath: string)
   }
 }
 
-export function resolveProjectParent(projectPath: string, requestedPath: string): string {
-  const target = resolveProjectTarget(projectPath, requestedPath)
-  const parent = dirname(target)
-  const root = getRealProjectRoot(projectPath)
-  const realParent = realpathSync.native(parent)
-  assertWithinRoot(root, realParent)
-  if (!statSync(realParent).isDirectory()) throw new Error("目标父路径不是目录")
-  return realParent
-}
-
 export function isSensitiveRelativePath(relativePath: string): boolean {
   const normalized = relativePath.replaceAll("\\", "/")
   const segments = normalized.split("/").filter(Boolean)

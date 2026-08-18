@@ -149,9 +149,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
 ]
 
 export const READ_ONLY_TOOL_NAMES = new Set(["list_files", "search_files", "read_file"])
-export const READ_ONLY_TOOL_DEFINITIONS = TOOL_DEFINITIONS.filter((definition) =>
-  READ_ONLY_TOOL_NAMES.has(definition.function.name),
-)
 
 export async function executeTool(
   projectPath: string | undefined,

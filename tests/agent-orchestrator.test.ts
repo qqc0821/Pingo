@@ -28,8 +28,9 @@ test("未授权时不注入任何绝对路径", () => {
 test("system 上下文要求最终回答先展示直接结果", () => {
   const conversation = buildToolConversation([{ role: "user", content: "桌面有多少个文件夹" }])
 
-  assert.match(String(conversation.at(0)?.content), /先直接给出用户要的结论或结果/)
+  assert.match(String(conversation.at(0)?.content), /可独立展示的最短直接答案/)
   assert.match(String(conversation.at(0)?.content), /不要用“任务已完成”“处理完成”等状态句代替结果/)
+  assert.match(String(conversation.at(0)?.content), /数量问题的第一句只回答总数/)
 })
 
 test("无 toolCalls 时直接结束并发出最终内容和步骤", async () => {

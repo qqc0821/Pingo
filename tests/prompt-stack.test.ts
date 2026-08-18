@@ -140,12 +140,12 @@ test("collapseStack 保留最近 maxVisible 张卡,其余折叠", () => {
   assert.equal(visible.length, MAX_VISIBLE_PROMPTS)
   assert.deepEqual(
     visible.map((item) => item.taskId),
-    ["c", "d", "e"],
-    "应保留最近 3 张(数组末尾最新)",
+    ["c", "d", "e"].slice(-MAX_VISIBLE_PROMPTS),
+    "应保留最近 maxVisible 张(数组末尾最新)",
   )
   assert.deepEqual(
     hidden.map((item) => item.taskId),
-    ["a", "b"],
+    ["a", "b", "c"].slice(0, 5 - MAX_VISIBLE_PROMPTS),
   )
 })
 

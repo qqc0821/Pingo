@@ -1,7 +1,8 @@
 import type { PetNotification, PetPromptItem } from "./types.js"
 
-/** 默认只平铺展示的折叠卡数量,超出部分收进"还有 N 条"分组。 */
-export const MAX_VISIBLE_PROMPTS = 3
+/** 默认只平铺展示的折叠卡数量,超出部分收进"还有 N 条"分组。
+    小窗口(392×312)内 2 行紧凑卡可无滚动放下,3 行会触发内部滚动。 */
+export const MAX_VISIBLE_PROMPTS = 2
 /** 同一来源通知在冷却窗内合并为一张卡(更新内容 + 计数)。 */
 export const NOTIFICATION_COOLDOWN_MS = 4000
 /** 非 sticky 通知卡超过该时长后自动折入"更多"分组(仅折叠,不删除)。 */
@@ -38,6 +39,7 @@ export interface UpsertPromptItemOptions {
   tone?: PetPromptItem["tone"]
   label?: string
   content?: string
+  summary?: string
   expandable?: boolean
   sticky?: boolean
   kind?: PetPromptItem["kind"]
@@ -64,6 +66,7 @@ export function upsertPromptItem(
       ...existing,
       ...patch,
       content: patch.content ?? existing.content,
+      summary: patch.summary ?? existing.summary,
       label: patch.label ?? existing.label,
       tone: patch.tone ?? existing.tone,
       expandable: patch.expandable ?? existing.expandable,
@@ -78,6 +81,7 @@ export function upsertPromptItem(
       ...base,
       ...patch,
       content: patch.content ?? base.content,
+      summary: patch.summary ?? base.summary,
       label: patch.label ?? base.label,
       tone: patch.tone ?? base.tone,
       createdAt: base.createdAt,

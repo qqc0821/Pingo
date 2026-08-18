@@ -123,6 +123,8 @@ button {
 
 .pet-prompt-layer {
   display: flex;
+  width: 100%;
+  max-width: 100%;
   min-height: 0;
   flex: 0 1 auto;
   flex-direction: column;
@@ -134,74 +136,39 @@ button {
   flex: 1 1 auto;
 }
 
-.prompt-stack-toggle {
-  display: inline-flex;
-  min-height: 26px;
-  flex: 0 0 auto;
-  align-items: center;
-  align-self: center;
-  gap: 4px;
-  padding: 4px 11px;
-  border: 1px solid var(--border-default);
-  border-radius: 999px;
-  background: var(--surface-raised-translucent);
-  box-shadow: var(--shadow-raised);
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 600;
-  transition:
-    background-color 160ms ease,
-    color 160ms ease;
-}
-
-.prompt-stack-toggle:hover {
-  background: var(--surface-subtle);
-  color: var(--text-primary);
-}
-
-.prompt-stack-toggle:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
-.prompt-stack-toggle svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.6;
-  transition: transform 160ms ease;
-}
-
-.prompt-stack-toggle[aria-expanded="true"] svg {
-  transform: rotate(180deg);
-}
-
 .pet-prompt-stack {
   display: flex;
+  width: 100%;
+  max-width: 100%;
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
   gap: 8px;
+  overflow: visible;
+}
+
+/* 多卡时:堆叠收敛为一个分组面板,内部卡片退化为"行",消除卡片墙观感。
+   旧卡显示摘要,最新卡显示完整内容;只有历史卡确实超出窗口时才滚动整个分组。 */
+.pet-prompt-stack--multi {
+  gap: 0;
   overflow-y: auto;
+  padding: 4px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  background: var(--surface-raised-translucent);
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  padding-right: 2px;
 }
 
 .prompt-count-badge {
   display: inline-grid;
-  min-width: 18px;
-  height: 16px;
-  padding: 0 5px;
+  min-width: 16px;
+  height: 14px;
+  padding: 0 4px;
   place-items: center;
   border-radius: 999px;
   background: var(--prompt-accent);
   color: var(--color-white);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   line-height: 1;
 }
@@ -214,10 +181,13 @@ button {
 
   position: relative;
   display: flex;
+  width: 100%;
+  max-width: 100%;
+  flex: 0 0 auto;
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  padding: 12px 14px 11px 12px;
+  padding: 12px 14px 15px 12px;
   border: 1px solid var(--prompt-border);
   border-radius: 20px;
   background: linear-gradient(
@@ -225,8 +195,41 @@ button {
     var(--prompt-surface) 0%,
     var(--surface-raised-translucent) 72%
   );
-  box-shadow: var(--shadow-prompt);
   animation: prompt-card-enter 180ms ease-out both;
+}
+
+/* 多卡分组面板内:卡片退化为紧凑行,不再携带独立边框/阴影/背景。
+   行固定自然高度,绝不被压缩(否则图标会被裁切),空间不足由外层堆叠滚动。 */
+.pet-prompt-stack--multi .pet-prompt {
+  flex: 0 0 auto;
+  padding: 9px 12px 11px;
+  border: 0;
+  border-bottom: 1px solid var(--line-subtle);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  animation: none;
+}
+
+.pet-prompt-stack--multi .pet-prompt:last-child {
+  border-bottom: 0;
+}
+
+.pet-prompt-stack--multi .pet-prompt-header {
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  column-gap: 9px;
+}
+
+.pet-prompt-stack--multi .pet-prompt-icon {
+  width: 34px;
+  height: 34px;
+  flex-basis: 34px;
+  border-radius: 11px;
+}
+
+.pet-prompt-stack--multi .prompt-icon-svg {
+  width: 18px;
+  height: 18px;
 }
 
 .pet-prompt--progress {
@@ -261,9 +264,7 @@ button {
   display: grid;
   min-width: 0;
   align-items: flex-start;
-  grid-template-areas:
-    "icon message actions"
-    "icon toggle actions";
+  grid-template-areas: "icon message actions";
   grid-template-columns: 44px minmax(0, 1fr) auto;
   column-gap: 10px;
 }
@@ -352,10 +353,8 @@ button {
 }
 
 .pet-prompt-content {
-  display: -webkit-box;
   min-width: 0;
   margin: 0;
-  overflow: hidden;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
@@ -363,78 +362,137 @@ button {
   overflow-wrap: anywhere;
   text-wrap: pretty;
   white-space: normal;
+}
+
+.prompt-rich-text {
+  min-width: 0;
+}
+
+.prompt-rich-text--summary {
+  display: -webkit-box;
+  overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
 }
 
-.pet-prompt--expanded {
-  flex: 1 1 auto;
+.prompt-rich-text p {
+  margin: 0;
 }
 
-.pet-prompt--expanded .pet-prompt-header {
-  min-height: 0;
-  flex: 1 1 auto;
-  grid-template-areas:
-    "icon toggle actions"
-    "message message message";
-  grid-template-rows: auto minmax(0, 1fr);
-  row-gap: 14px;
+.prompt-rich-text p + p,
+.prompt-rich-text .prompt-list + p,
+.prompt-rich-text p + .prompt-list {
+  margin-top: 8px;
 }
 
-.pet-prompt--expanded .pet-prompt-heading {
-  display: flex;
-  min-height: 0;
-  flex-direction: column;
-  padding-top: 0;
+.prompt-list {
+  margin: 6px 0 0;
+  padding-left: 21px;
 }
 
-.pet-prompt--expanded .pet-prompt-content {
-  display: block;
-  min-height: 0;
-  flex: 1 1 auto;
-  overflow-y: auto;
-  padding: 0 5px 22px 0;
-  font-size: 14px;
+.prompt-list li + li {
+  margin-top: 3px;
+}
+
+.prompt-inline-code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface-subtle);
+  color: var(--text-primary);
+  font-size: 0.95em;
+  font-weight: 650;
+}
+
+.pet-prompt--current .pet-prompt-content {
   font-weight: 500;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  white-space: pre-wrap;
-  -webkit-line-clamp: unset;
+  line-height: 1.55;
 }
 
-.pet-prompt--content-overflow::after {
-  position: absolute;
-  right: 14px;
-  bottom: 11px;
-  left: 14px;
-  z-index: 1;
-  height: 26px;
-  pointer-events: none;
-  background: linear-gradient(transparent, var(--prompt-surface));
-  content: "";
-}
-
-.pet-prompt-toggle {
-  grid-area: toggle;
+.pet-prompt-detail-toggle {
   display: inline-flex;
-  min-height: 32px;
-  flex: 0 0 auto;
+  min-height: 28px;
   align-items: center;
+  align-self: flex-start;
   gap: 3px;
-  padding: 5px 5px 5px 4px;
+  margin-top: 7px;
+  padding: 3px 6px;
   border-radius: 8px;
   background: transparent;
   color: var(--prompt-accent);
   cursor: pointer;
   font-size: 11px;
   font-weight: 650;
-  justify-self: start;
 }
 
-.pet-prompt--expanded .pet-prompt-toggle {
-  justify-self: end;
+.pet-prompt-detail-toggle:hover {
+  background: var(--prompt-icon-surface);
+}
+
+.pet-prompt-detail-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.pet-prompt-detail-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  transition: transform 160ms ease;
+}
+
+.pet-prompt-detail-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.pet-prompt--detail {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.pet-prompt--detail .pet-prompt-header {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.pet-prompt--detail .pet-prompt-heading {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.pet-prompt--detail .pet-prompt-content {
+  min-height: 0;
+  max-height: 280px;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding-right: 8px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.pet-prompt--detail .pet-prompt-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.pet-prompt--detail .pet-prompt-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pet-prompt--detail .pet-prompt-content::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--prompt-accent) 34%, transparent);
+}
+
+.pet-prompt--detail .pet-prompt-content::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--prompt-accent) 52%, transparent);
+}
+
+.pet-prompt--detail .prompt-rich-text {
+  padding-bottom: 4px;
 }
 
 .pet-prompt-actions {
@@ -443,15 +501,6 @@ button {
   flex: 0 0 auto;
   align-items: center;
   gap: 2px;
-}
-
-.pet-prompt-toggle:hover {
-  background: var(--prompt-icon-surface);
-}
-
-.pet-prompt-toggle:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
 }
 
 .pet-prompt-dismiss {
@@ -477,19 +526,20 @@ button {
 
 .pet-prompt-cancel {
   display: inline-flex;
-  min-height: 30px;
+  min-height: 28px;
   align-items: center;
-  padding: 4px 9px;
+  padding: 3px 8px;
   border-radius: 8px;
   background: transparent;
-  color: var(--prompt-accent);
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .pet-prompt-cancel:hover {
-  background: var(--prompt-icon-surface);
+  background: var(--surface-subtle);
+  color: var(--prompt-accent);
 }
 
 .pet-prompt-cancel:focus-visible {
@@ -504,21 +554,6 @@ button {
   stroke: currentColor;
   stroke-linecap: round;
   stroke-width: 1.8;
-}
-
-.pet-prompt-toggle svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.6;
-  transition: transform 160ms ease;
-}
-
-.pet-prompt--expanded .pet-prompt-toggle svg {
-  transform: rotate(180deg);
 }
 
 .pet-prompt-progress {
@@ -546,44 +581,9 @@ button {
   margin: 10px 12px 0;
 }
 
-.quick-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 2px 6px;
-}
-
-.quick-actions button {
-  min-height: 26px;
-  padding: 3px 11px;
-  border: 1px solid var(--border-default);
-  border-radius: 999px;
-  background: var(--surface-raised-translucent);
-  box-shadow: var(--shadow-raised);
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 600;
-  transition:
-    background-color 160ms ease,
-    color 160ms ease,
-    border-color 160ms ease;
-}
-
-.quick-actions button:hover {
-  background: var(--surface-subtle);
-  border-color: var(--focus-ring);
-  color: var(--text-primary);
-}
-
-.quick-actions button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
 .quick-composer-shell {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   min-height: 44px;
   overflow: hidden;
   border: 1px solid var(--border-default);
@@ -1331,6 +1331,8 @@ button {
   right: 16px;
   bottom: 16px;
   z-index: 10;
+  width: 108px;
+  height: 146px;
   transition: opacity 140ms ease;
 }
 
@@ -1344,6 +1346,64 @@ button {
 .app-shell.collapsed .pet-dock {
   right: 8px;
   bottom: 8px;
+}
+
+.pet-prompt-toggle-button {
+  position: absolute;
+  top: 112px;
+  left: 39px;
+  z-index: 2;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  box-shadow: 0 5px 14px rgb(15 23 42 / 14%);
+  color: var(--status-success);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(0, -4px, 0);
+  transition:
+    opacity 120ms ease-out,
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 140ms ease-out,
+    color 140ms ease-out,
+    box-shadow 140ms ease-out;
+}
+
+.pet-dock:hover .pet-prompt-toggle-button,
+.pet-prompt-toggle-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate3d(0, 0, 0);
+}
+
+.pet-prompt-toggle-button:hover {
+  background: var(--status-success-icon);
+  box-shadow: 0 7px 17px rgb(15 23 42 / 17%);
+  color: var(--status-success);
+}
+
+.pet-prompt-toggle-button:active {
+  transform: translate3d(0, 1px, 0);
+}
+
+.pet-prompt-toggle-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.pet-prompt-toggle-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.55;
 }
 
 .pet-button {
@@ -1766,12 +1826,9 @@ button {
   .pet-prompt--progress .pet-prompt-icon::after,
   .pet-prompt--progress .pet-prompt-label::before,
   .pet-prompt-progress > span,
-  .pet-prompt-toggle svg,
-  .prompt-stack-toggle,
-  .prompt-stack-toggle svg,
   .pet-prompt-cancel,
-  .quick-actions button,
   .pet-dock,
+  .pet-prompt-toggle-button,
   .quick-composer-shell,
   .quick-composer button {
     animation: none !important;

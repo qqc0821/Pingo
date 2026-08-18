@@ -6,8 +6,6 @@ import type {
   OperationPlan,
 } from "../../shared/types.js"
 
-export const APPROVAL_TTL_MS = 60_000
-
 interface PendingApproval {
   request: ApprovalRequest
   resolve: (decision: BrokerDecision) => void

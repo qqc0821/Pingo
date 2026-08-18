@@ -135,14 +135,6 @@ It does **no permission enforcement**: commands run directly, paths are not rest
 - Operation history is stored in a `0600` redacted JSONL file under the app data directory; API keys, full prompts, file contents, and unredacted output are never persisted.
 - Capability grants never survive an app restart; a Trusted Workspace persists only the directory choice, not any command or file grant.
 
-## Docs
-
-Detailed plans live under `docs/` (Chinese):
-
-- [Architecture alignment & feature priorities](docs/ARCHITECTURE_ALIGNMENT.md)
-- [Controlled file & terminal capability plan](docs/TERMINAL_CAPABILITY_PLAN.md)
-- [Git management rules](docs/GIT_MANAGEMENT.md)
-
 ## License
 
 MIT

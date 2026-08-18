@@ -46,6 +46,8 @@ export interface PetPromptItem {
   tone: PromptTone
   label: string
   content: string
+  /** 卡片直接展示的完整简述;缺省时回退到 content。 */
+  summary?: string
   /** 内容较长时允许展开查看完整结果。 */
   expandable?: boolean
   createdAt: number

@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type {
   CSSProperties,
   FormEvent,
   KeyboardEvent,
   PointerEvent,
   ReactElement,
-  UIEvent,
+  ReactNode,
 } from "react"
 import petGentleImage from "../../assets/pet-gentle.png"
 import petImage from "../../assets/pet.png"
@@ -29,18 +29,128 @@ import {
   upsertPromptItem,
   type UpsertPromptItemOptions,
 } from "../../shared/promptStack.js"
+import { normalizePromptContent, summarizePromptContent } from "../../shared/promptSummary.js"
 
 type PetImageKey = "idle" | "happy" | "thinking" | "gentle"
 
 const HAPPY_STATE_DURATION_MS = 1800
 const POINTER_TAP_THRESHOLD_PX = 4
-const PROMPT_DETAIL_ID_PREFIX = "pingo-prompt-detail"
+const PROMPT_HISTORY_STORAGE_KEY = "pingo.prompt-history.v1"
+
+function getPromptSummary(prompt: PetPromptItem): string {
+  const derived = summarizePromptContent(prompt.content)
+  if (!prompt.summary || prompt.summary === prompt.content) return derived
+  return prompt.summary
+}
+
+function renderInlinePromptMarkdown(text: string): ReactNode[] {
+  const nodes: ReactNode[] = []
+  const tokenPattern = /(\*\*|__)(.+?)\1|`([^`]+)`/g
+  let cursor = 0
+  for (const match of text.matchAll(tokenPattern)) {
+    const index = match.index ?? 0
+    if (index > cursor) nodes.push(text.slice(cursor, index).replace(/\*\*/g, ""))
+    if (match[3] !== undefined) {
+      nodes.push(
+        <code key={`code-${index}`} className="prompt-inline-code">
+          {match[3]}
+        </code>,
+      )
+    } else {
+      nodes.push(<strong key={`strong-${index}`}>{match[2]}</strong>)
+    }
+    cursor = index + match[0].length
+  }
+  if (cursor < text.length) nodes.push(text.slice(cursor).replace(/\*\*/g, ""))
+  return nodes
+}
+
+function PromptContent({ content, summary }: { content: string; summary: boolean }): ReactElement {
+  const lines = normalizePromptContent(content).split("\n")
+  const blocks: ReactElement[] = []
+  let index = 0
+  while (index < lines.length) {
+    const line = lines[index]?.trim() ?? ""
+    if (!line) {
+      index += 1
+      continue
+    }
+    const orderedMatch = line.match(/^(\d+)\.\s+(.+)$/)
+    const unorderedMatch = line.match(/^[-*]\s+(.+)$/)
+    if (orderedMatch || unorderedMatch) {
+      const ordered = orderedMatch !== null
+      const items: string[] = []
+      while (index < lines.length) {
+        const candidate = lines[index]?.trim() ?? ""
+        const match = ordered ? candidate.match(/^\d+\.\s+(.+)$/) : candidate.match(/^[-*]\s+(.+)$/)
+        if (!match) break
+        if (match[1]) items.push(match[1])
+        index += 1
+      }
+      const ListTag = ordered ? "ol" : "ul"
+      blocks.push(
+        <ListTag key={`list-${index}`} className="prompt-list">
+          {items.map((item, itemIndex) => (
+            <li key={`${index}-${itemIndex}`}>{renderInlinePromptMarkdown(item)}</li>
+          ))}
+        </ListTag>,
+      )
+      continue
+    }
+    const paragraph: string[] = []
+    while (index < lines.length) {
+      const candidate = lines[index]?.trim() ?? ""
+      if (!candidate || /^\d+\.\s+/.test(candidate) || /^[-*]\s+/.test(candidate)) break
+      paragraph.push(candidate)
+      index += 1
+    }
+    blocks.push(
+      <p key={`paragraph-${index}`}>
+        {paragraph.flatMap((part, partIndex) =>
+          partIndex === 0
+            ? renderInlinePromptMarkdown(part)
+            : [<br key={`br-${partIndex}`} />, ...renderInlinePromptMarkdown(part)],
+        )}
+      </p>,
+    )
+  }
+  return (
+    <div className={`prompt-rich-text ${summary ? "prompt-rich-text--summary" : ""}`}>{blocks}</div>
+  )
+}
+
+function readPromptHistory(): PetPromptItem[] {
+  try {
+    const raw = window.localStorage.getItem(PROMPT_HISTORY_STORAGE_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(isPersistablePrompt)
+  } catch {
+    return []
+  }
+}
+
+function isPersistablePrompt(value: unknown): value is PetPromptItem {
+  if (typeof value !== "object" || value === null) return false
+  const item = value as Partial<PetPromptItem>
+  return (
+    typeof item.id === "string" &&
+    typeof item.kind === "string" &&
+    typeof item.tone === "string" &&
+    typeof item.label === "string" &&
+    typeof item.content === "string" &&
+    typeof item.createdAt === "number" &&
+    typeof item.updatedAt === "number"
+  )
+}
 
 /** 预览(无 window.pingo 的纯浏览器模式)使用的提示描述。 */
 interface PetPrompt {
   tone: PromptTone
   label: string
   content: string
+  summary?: string
   expandable?: boolean
 }
 
@@ -100,6 +210,9 @@ const DEFAULT_PROMPT_PREVIEW: PetPrompt = {
   content: "正在检查信息层级、长内容与不同消息状态。",
 }
 
+const LONG_RESULT_PREVIEW_CONTENT =
+  "Pingo 项目里共有 25 张图片，其中 23 张 PNG，2 张 GIF。\n\n具体分布：\n\nPNG（23 张）\n- build/pet-shots/：18 张\n- docs/：1 张\n- src/assets/：4 张\n\nGIF（2 张）\n- src/assets/pingo-agent-demo-en.gif\n- src/assets/pingo-agent-demo-zh-CN.gif\n\n另外说明：项目里还有两个视频文件，不计算在图片内；.jpg、.svg、.webp 均未发现实际图片文件。"
+
 const PROMPT_PREVIEWS: Record<string, PetPrompt> = {
   progress: DEFAULT_PROMPT_PREVIEW,
   success: {
@@ -123,8 +236,8 @@ const PROMPT_PREVIEWS: Record<string, PetPrompt> = {
   long: {
     tone: "success",
     label: "已完成",
-    content:
-      "桌面共有 12 个文件夹。\n\n其中包括:Projects、Documents、Downloads、Screenshots 等。\n\n我已按名称整理完整列表,展开后可以继续查看全部内容。",
+    content: LONG_RESULT_PREVIEW_CONTENT,
+    summary: "共有 25 张图片。",
     expandable: true,
   },
 }
@@ -161,6 +274,7 @@ function previewItemFromPrompt(prompt: PetPrompt, now: number): PetPromptItem {
     tone: prompt.tone,
     label: prompt.label,
     content: prompt.content,
+    summary: prompt.summary,
     expandable: prompt.expandable,
     createdAt: now,
     updatedAt: now,
@@ -197,8 +311,8 @@ function buildStackPreview(now: number): PetPromptItem[] {
       kind: "result",
       tone: "success",
       label: "已完成",
-      content:
-        "桌面共有 12 个文件夹。\n\n其中包括:Projects、Documents、Downloads、Screenshots 等。\n\n我已按名称整理完整列表,展开后可以继续查看全部内容。",
+      content: LONG_RESULT_PREVIEW_CONTENT,
+      summary: "共有 25 张图片。",
       expandable: true,
       createdAt: now,
       updatedAt: now,
@@ -220,8 +334,11 @@ function buildStackPreview(now: number): PetPromptItem[] {
 }
 
 function readPreviewState(): { items: PetPromptItem[]; petState: PetState } | null {
-  if (!import.meta.env.DEV || window.pingo !== undefined) return null
+  if (window.pingo !== undefined) return null
   const params = new URLSearchParams(window.location.search)
+  const previewRequested = params.get("promptPreview") !== null
+  // 预览模式:DEV 下默认可用;生产构建需显式带 promptPreview 参数(用于本地视觉检查)。
+  if (!import.meta.env.DEV && !previewRequested) return null
   const previewName = params.get("promptPreview") ?? "progress"
   const now = Date.now()
 
@@ -283,64 +400,32 @@ function PromptIcon({ tone }: { tone: PromptTone }): ReactElement {
 
 function PromptCard({
   prompt,
+  compact,
   detailOpen,
   onToggleDetail,
   onDismiss,
   onCancel,
-  autoFocus,
 }: {
   prompt: PetPromptItem
+  compact: boolean
   detailOpen: boolean
   onToggleDetail: () => void
   onDismiss: () => void
   onCancel?: () => void
-  autoFocus: boolean
 }): ReactElement {
   const liveMode = prompt.tone === "error" ? "assertive" : "polite"
-  const contentRef = useRef<HTMLParagraphElement>(null)
-  const dismissRef = useRef<HTMLButtonElement>(null)
-  const [contentIsClipped, setContentIsClipped] = useState(false)
-  const [contentHasScroll, setContentHasScroll] = useState(false)
-  const [contentAtEnd, setContentAtEnd] = useState(true)
-  const detailId = `${PROMPT_DETAIL_ID_PREFIX}-${prompt.id}`
-
-  useLayoutEffect(() => {
-    const contentElement = contentRef.current
-    if (!contentElement) return
-    const measure = () => {
-      const hasOverflow = contentElement.scrollHeight > contentElement.clientHeight + 1
-      setContentIsClipped(!detailOpen && prompt.expandable === true && hasOverflow)
-      setContentHasScroll(detailOpen && hasOverflow)
-      setContentAtEnd(
-        !detailOpen ||
-          !hasOverflow ||
-          contentElement.scrollTop + contentElement.clientHeight >= contentElement.scrollHeight - 1,
-      )
-    }
-    const observer = new ResizeObserver(measure)
-
-    measure()
-    observer.observe(contentElement)
-    return () => observer.disconnect()
-  }, [detailOpen, prompt.content, prompt.expandable])
-
-  useEffect(() => {
-    if (autoFocus) dismissRef.current?.focus()
-  }, [autoFocus])
-
-  const handleContentScroll = useCallback((event: UIEvent<HTMLParagraphElement>) => {
-    const contentElement = event.currentTarget
-    setContentAtEnd(
-      contentElement.scrollTop + contentElement.clientHeight >= contentElement.scrollHeight - 1,
-    )
-  }, [])
-
-  const showToggle = detailOpen || contentIsClipped
   const runningTask = prompt.kind === "task" && prompt.sticky === true
+  const summaryContent = getPromptSummary(prompt)
+  const fullContent = normalizePromptContent(prompt.content)
+  const canShowDetails =
+    prompt.expandable === true && Boolean(summaryContent) && summaryContent !== fullContent
+  const showSummary = !detailOpen && (compact || canShowDetails)
+  const displayedContent = showSummary ? summaryContent : prompt.content
+  const detailId = `pingo-prompt-detail-${prompt.id}`
 
   return (
     <section
-      className={`pet-prompt pet-prompt--${prompt.tone} ${detailOpen ? "pet-prompt--expanded" : ""} ${contentHasScroll && !contentAtEnd ? "pet-prompt--content-overflow" : ""}`}
+      className={`pet-prompt pet-prompt--${prompt.tone} ${compact ? "pet-prompt--compact" : "pet-prompt--current"} ${detailOpen ? "pet-prompt--detail" : ""}`}
       role={prompt.tone === "error" ? "alert" : "status"}
       aria-live={liveMode}
       aria-atomic="false"
@@ -359,29 +444,24 @@ function PromptCard({
               <span className="prompt-count-badge">×{prompt.count}</span>
             ) : null}
           </span>
-          <p
-            ref={contentRef}
-            id={detailId}
-            className="pet-prompt-content"
-            onScroll={handleContentScroll}
-          >
-            {prompt.content}
-          </p>
+          <div id={detailId} className="pet-prompt-content">
+            <PromptContent content={displayedContent} summary={showSummary} />
+          </div>
+          {canShowDetails ? (
+            <button
+              className="pet-prompt-detail-toggle"
+              type="button"
+              aria-expanded={detailOpen}
+              aria-controls={detailId}
+              onClick={onToggleDetail}
+            >
+              <span>{detailOpen ? "收起详情" : "查看详情"}</span>
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m4.75 6.25 3.25 3.25 3.25-3.25" />
+              </svg>
+            </button>
+          ) : null}
         </div>
-        {showToggle ? (
-          <button
-            className="pet-prompt-toggle"
-            type="button"
-            aria-expanded={detailOpen}
-            aria-controls={detailId}
-            onClick={onToggleDetail}
-          >
-            <span>{detailOpen ? "收起" : "查看完整结果"}</span>
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="m4.75 6.25 3.25 3.25 3.25-3.25" />
-            </svg>
-          </button>
-        ) : null}
         <div className="pet-prompt-actions">
           {runningTask && onCancel ? (
             <button className="pet-prompt-cancel" type="button" onClick={onCancel}>
@@ -389,10 +469,9 @@ function PromptCard({
             </button>
           ) : null}
           <button
-            ref={dismissRef}
             className="pet-prompt-dismiss"
             type="button"
-            aria-label={runningTask ? "隐藏任务进度(任务继续运行)" : "关闭提示"}
+            aria-label={runningTask ? "关闭当前任务卡" : "关闭当前提示卡"}
             onClick={onDismiss}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -456,27 +535,23 @@ const NOTIFICATION_ACTION_STATE: Record<NonNullable<PetNotification["action"]>, 
   idle: "idle",
 }
 
-const QUICK_ACTIONS_SUCCESS = ["继续", "总结一下", "换个方式"]
-const QUICK_ACTIONS_ERROR = ["重试", "换个方式"]
-
 export function App(): ReactElement {
   const [preview] = useState(readPreviewState)
-  const [prompts, setPrompts] = useState<PetPromptItem[]>(() => preview?.items ?? [])
-  const [expanded, setExpanded] = useState(() => preview !== null)
+  const [prompts, setPrompts] = useState<PetPromptItem[]>(
+    () => preview?.items ?? readPromptHistory(),
+  )
+  const [expanded, setExpanded] = useState(true)
   const [expandedCardId, setExpandedCardId] = useState<string | null>(() => {
     if (!preview) return null
     const params = new URLSearchParams(window.location.search)
-    if (params.get("detailOpen") === "1") return preview.items[preview.items.length - 1]?.id ?? null
-    return null
+    if (params.get("detailOpen") !== "1") return null
+    return [...preview.items].reverse().find((item) => item.expandable)?.id ?? null
   })
-  const [stackRevealed, setStackRevealed] = useState(false)
-  const [focusCardId, setFocusCardId] = useState<string | null>(null)
   const [appearanceScale, setAppearanceScale] = useState(1)
   const [petState, setPetState] = useState<PetState>(() => preview?.petState ?? "idle")
   const [petStateRevision, setPetStateRevision] = useState(0)
   const [draft, setDraft] = useState("")
   const [isSending, setIsSending] = useState(false)
-  const [showInput, setShowInput] = useState(false)
   const dragStart = useRef<{ x: number; y: number; pointerId: number; didDrag: boolean } | null>(
     null,
   )
@@ -484,12 +559,21 @@ export function App(): ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const stackRef = useRef<HTMLDivElement>(null)
   const petButtonRef = useRef<HTMLButtonElement>(null)
+  const isComposingRef = useRef(false)
+  const justEndedCompositionRef = useRef(false)
+  const previousPromptCountRef = useRef(prompts.length)
+  const promptsRef = useRef(prompts)
   const taskIsActive = useRef(false)
   const activeTaskId = useRef<string | null>(null)
   const taskKey = useRef("")
   const responseBuffer = useRef("")
   const operationResultBuffer = useRef("")
+  const activeRequestRef = useRef("")
+  const closedPromptHistoryRef = useRef<PetPromptItem[]>([])
   const currentPetState = PET_STATE_CONFIG[petState]
+  const newestPrompt = prompts[prompts.length - 1] ?? null
+
+  promptsRef.current = prompts
 
   useEffect(() => {
     for (const imageSource of new Set(Object.values(PET_IMAGES))) {
@@ -534,19 +618,46 @@ export function App(): ReactElement {
   }, [showPetState])
 
   useEffect(() => {
-    void window.pingo?.pet.setDetailExpanded(expandedCardId !== null)
-  }, [expandedCardId])
+    void window.pingo?.pet.setExpanded(expanded)
+  }, [expanded])
 
-  /** 新卡进入时把堆叠滚动到最新(底部)。 */
   useEffect(() => {
+    void window.pingo?.pet.setDetailExpanded(expanded && expandedCardId !== null)
+  }, [expanded, expandedCardId])
+
+  /** 只有新增卡片时滚动到最新;同一任务更新内容不能把卡片顶部滚出窗口。 */
+  useEffect(() => {
+    const previousCount = previousPromptCountRef.current
+    previousPromptCountRef.current = prompts.length
     const stackElement = stackRef.current
-    if (stackElement) stackElement.scrollTop = stackElement.scrollHeight
-  }, [prompts])
+    if (!stackElement || prompts.length <= previousCount) return
+    window.requestAnimationFrame(() => {
+      stackElement.scrollTop = stackElement.scrollHeight
+    })
+  }, [prompts.length])
+
+  useEffect(() => {
+    if (preview) return
+    const historyById = new Map<string, PetPromptItem>()
+    for (const item of closedPromptHistoryRef.current) {
+      if (item.tone !== "progress") historyById.set(item.id, item)
+    }
+    for (const item of prompts) {
+      if (item.tone !== "progress") historyById.set(item.id, item)
+    }
+    const persistable = [...historyById.values()].sort(
+      (left, right) => left.createdAt - right.createdAt,
+    )
+    try {
+      window.localStorage.setItem(PROMPT_HISTORY_STORAGE_KEY, JSON.stringify(persistable))
+    } catch {
+      // 本地存储不可用时仍保留当前会话中的提示卡。
+    }
+  }, [prompts, preview])
 
   const closeDialog = useCallback((restorePetFocus = true) => {
     setExpanded(false)
     setExpandedCardId(null)
-    setStackRevealed(false)
     void window.pingo?.pet.setExpanded(false)
     if (restorePetFocus) window.requestAnimationFrame(() => petButtonRef.current?.focus())
   }, [])
@@ -559,15 +670,11 @@ export function App(): ReactElement {
         setExpandedCardId(null)
         return
       }
-      if (stackRevealed) {
-        setStackRevealed(false)
-        return
-      }
       closeDialog()
     }
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [closeDialog, expanded, expandedCardId, stackRevealed])
+  }, [closeDialog, expanded, expandedCardId])
 
   /** 任务卡:按 taskKey 原地更新,一次任务永远是一张卡。 */
   const updateTaskCard = useCallback((patch: UpsertPromptItemOptions) => {
@@ -578,22 +685,18 @@ export function App(): ReactElement {
     )
   }, [])
 
-  const dismissPrompt = useCallback(
-    (id: string) => {
-      const index = prompts.findIndex((item) => item.id === id)
-      const next = removePromptItem(prompts, id)
-      setPrompts(next)
-      if (next.length === 0) {
-        setExpanded(false)
-        setStackRevealed(false)
-        void window.pingo?.pet.setExpanded(false)
-        return
-      }
-      const focusTarget = next[Math.min(index, next.length - 1)] ?? null
-      setFocusCardId(focusTarget ? focusTarget.id : null)
-    },
-    [prompts],
-  )
+  /** 关闭当前卡片,保留提示框和输入框。 */
+  const dismissPrompt = useCallback((promptId: string) => {
+    const prompt = promptsRef.current.find((item) => item.id === promptId)
+    if (prompt && prompt.tone !== "progress") {
+      closedPromptHistoryRef.current = [
+        ...closedPromptHistoryRef.current.filter((item) => item.id !== promptId),
+        prompt,
+      ]
+    }
+    setExpandedCardId((current) => (current === promptId ? null : current))
+    setPrompts((current) => removePromptItem(current, promptId))
+  }, [])
 
   const cancelTask = useCallback(() => {
     const taskId = activeTaskId.current
@@ -626,8 +729,6 @@ export function App(): ReactElement {
 
   const openDialog = useCallback(() => {
     setExpanded(true)
-    setShowInput(true)
-    setExpandedCardId(null)
     void window.pingo?.pet.setExpanded(true)
     window.requestAnimationFrame(() => textareaRef.current?.focus())
   }, [])
@@ -720,6 +821,9 @@ export function App(): ReactElement {
             tone: "error",
             label: "操作未完成",
             content: operationResult || "未能完成当前操作。请检查权限或调整任务后再试一次。",
+            summary: summarizePromptContent(
+              operationResult || "未能完成当前操作。请检查权限或调整任务后再试一次。",
+            ),
             expandable: true,
           })
         }
@@ -730,13 +834,20 @@ export function App(): ReactElement {
         setIsSending(false)
         activeTaskId.current = null
         const finalResult = responseBuffer.current.trim() || operationResultBuffer.current.trim()
+        const resultContent =
+          event.type === "done"
+            ? finalResult || "请求已处理完毕,暂未返回额外说明。"
+            : event.type === "error"
+              ? `${event.message}\n请检查设置或调整任务后再试。`
+              : "任务已取消,没有继续执行操作。你可以随时重新开始。"
         updateTaskCard(
           event.type === "done"
             ? {
                 kind: "result",
                 tone: "success",
                 label: "已完成",
-                content: finalResult || "请求已处理完毕,暂未返回额外说明。",
+                content: resultContent,
+                summary: summarizePromptContent(resultContent, activeRequestRef.current),
                 expandable: true,
                 sticky: false,
               }
@@ -744,10 +855,8 @@ export function App(): ReactElement {
                 kind: "result",
                 tone: event.type === "error" ? "error" : "neutral",
                 label: event.type === "error" ? "未完成" : "已取消",
-                content:
-                  event.type === "error"
-                    ? `${event.message}\n请检查设置或调整任务后再试。`
-                    : "任务已取消,没有继续执行操作。你可以随时重新开始。",
+                content: resultContent,
+                summary: summarizePromptContent(resultContent),
                 expandable: true,
                 sticky: false,
               },
@@ -777,6 +886,8 @@ export function App(): ReactElement {
       taskKey.current = createPromptId("task")
       responseBuffer.current = ""
       operationResultBuffer.current = ""
+      activeRequestRef.current = content
+      setExpandedCardId(null)
       setDraft("")
       const textareaElement = textareaRef.current
       if (textareaElement) textareaElement.style.height = "auto"
@@ -803,6 +914,7 @@ export function App(): ReactElement {
             tone: "error",
             label: "无法开始",
             content: "暂时无法开始任务。请检查模型设置与网络连接,然后再试一次。",
+            summary: "暂时无法开始任务。请检查模型设置与网络连接,然后再试一次。",
             expandable: true,
             sticky: false,
           })
@@ -816,13 +928,32 @@ export function App(): ReactElement {
 
   const handleDraftKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault()
-        submitMessage()
+      if (event.key !== "Enter" || event.shiftKey) return
+      if (
+        isComposingRef.current ||
+        event.nativeEvent.isComposing ||
+        event.nativeEvent.keyCode === 229 ||
+        justEndedCompositionRef.current
+      ) {
+        return
       }
+      event.preventDefault()
+      submitMessage()
     },
     [submitMessage],
   )
+
+  const handleCompositionStart = useCallback(() => {
+    isComposingRef.current = true
+  }, [])
+
+  const handleCompositionEnd = useCallback(() => {
+    isComposingRef.current = false
+    justEndedCompositionRef.current = true
+    window.setTimeout(() => {
+      justEndedCompositionRef.current = false
+    }, 0)
+  }, [])
 
   const handleComposerChange = useCallback((value: string) => {
     setDraft(value)
@@ -893,21 +1024,12 @@ export function App(): ReactElement {
   }, [])
 
   const { visible, hidden } = collapseStack(prompts)
-  const stackCards = stackRevealed ? [...hidden, ...visible] : visible
-  const newest = prompts[prompts.length - 1] ?? null
-  const quickActions =
-    newest === null
-      ? []
-      : newest.tone === "error"
-        ? QUICK_ACTIONS_ERROR
-        : newest.tone === "success"
-          ? QUICK_ACTIONS_SUCCESS
-          : []
+  const stackCards = [...hidden, ...visible]
   const composerPlaceholder = isSending
     ? "任务处理中…"
-    : newest?.tone === "error"
-      ? "调整后重试,或换个问题…"
-      : "追问,或告诉 Pingo 你想完成什么…"
+    : newestPrompt?.tone === "error"
+      ? "调整后重试,或输入新的任务…"
+      : "告诉 Pingo 你想完成什么…"
 
   return (
     <main
@@ -916,76 +1038,68 @@ export function App(): ReactElement {
     >
       {expanded && (
         <div className="pet-prompt-layer">
-          {hidden.length > 0 ? (
-            <button
-              className="prompt-stack-toggle"
-              type="button"
-              aria-expanded={stackRevealed}
-              onClick={() => setStackRevealed((current) => !current)}
-            >
-              <span>{stackRevealed ? "收起" : `还有 ${hidden.length} 条消息`}</span>
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="m4.75 6.25 3.25 3.25 3.25-3.25" />
-              </svg>
-            </button>
-          ) : null}
-          <div ref={stackRef} className="pet-prompt-stack">
+          <div
+            ref={stackRef}
+            className={`pet-prompt-stack ${stackCards.length > 1 ? "pet-prompt-stack--multi" : ""}`}
+          >
             {stackCards.map((item) => (
               <PromptCard
                 key={item.id}
                 prompt={item}
+                compact={item.id !== newestPrompt?.id}
                 detailOpen={expandedCardId === item.id}
                 onToggleDetail={() =>
                   setExpandedCardId((current) => (current === item.id ? null : item.id))
                 }
                 onDismiss={() => dismissPrompt(item.id)}
                 onCancel={item.kind === "task" && item.sticky === true ? cancelTask : undefined}
-                autoFocus={focusCardId === item.id}
               />
             ))}
           </div>
-          {(showInput || isSending) && (
-            <form className="quick-composer" onSubmit={submitMessage}>
-              <label className="visually-hidden" htmlFor="pingo-message">
-                输入给 Pingo 的消息
-              </label>
-              {quickActions.length > 0 && !isSending ? (
-                <div className="quick-actions" role="group" aria-label="快捷追问">
-                  {quickActions.map((action) => (
-                    <button
-                      key={action}
-                      type="button"
-                      onClick={() => {
-                        setDraft(action)
-                        window.requestAnimationFrame(() => textareaRef.current?.focus())
-                      }}
-                    >
-                      {action}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              <div className="quick-composer-shell">
-                <textarea
-                  ref={textareaRef}
-                  id="pingo-message"
-                  name="message"
-                  rows={1}
-                  value={draft}
-                  onChange={(event) => handleComposerChange(event.target.value)}
-                  onKeyDown={handleDraftKeyDown}
-                  placeholder={composerPlaceholder}
-                  autoComplete="off"
-                />
-                <button type="submit" disabled={!draft.trim() || isSending}>
-                  {isSending ? "处理中…" : "发送"}
-                </button>
-              </div>
-            </form>
-          )}
+          <form className="quick-composer" onSubmit={submitMessage}>
+            <label className="visually-hidden" htmlFor="pingo-message">
+              输入给 Pingo 的消息
+            </label>
+            <div className="quick-composer-shell">
+              <textarea
+                ref={textareaRef}
+                id="pingo-message"
+                name="message"
+                rows={1}
+                value={draft}
+                onChange={(event) => handleComposerChange(event.target.value)}
+                onKeyDown={handleDraftKeyDown}
+                onCompositionStart={handleCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+                placeholder={composerPlaceholder}
+                autoComplete="off"
+              />
+              <button type="submit" disabled={!draft.trim() || isSending}>
+                {isSending ? "处理中…" : "发送"}
+              </button>
+            </div>
+          </form>
         </div>
       )}
       <div className="pet-dock">
+        <button
+          className="pet-prompt-toggle-button"
+          type="button"
+          aria-label={expanded ? "收起提示框" : "展开提示框"}
+          aria-expanded={expanded}
+          onClick={() => {
+            if (expanded) {
+              closeDialog()
+            } else {
+              openDialog()
+            }
+          }}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M4.25 4.25h11.5A2.25 2.25 0 0 1 18 6.5v6a2.25 2.25 0 0 1-2.25 2.25H9l-4.25 2.5v-2.5h-.5A2.25 2.25 0 0 1 2 12.5v-6a2.25 2.25 0 0 1 2.25-2.25Z" />
+            <path d="M6.75 9.5h.01M10 9.5h.01M13.25 9.5h.01" />
+          </svg>
+        </button>
         <button
           ref={petButtonRef}
           className={`pet-button pet-state-${petState}`}

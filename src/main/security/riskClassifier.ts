@@ -58,7 +58,3 @@ export function classifyOperation(kind: OperationKind): RiskClassification {
   if (!classification) throw new Error("未知操作类型")
   return { ...classification }
 }
-
-export function assertAllowedRisk(risk: RiskLevel): void {
-  if (risk === "R4") throw new Error("该操作属于 R4，Pingo 永不执行")
-}
