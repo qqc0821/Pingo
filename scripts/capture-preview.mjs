@@ -6,7 +6,7 @@ import { writeFileSync, mkdirSync } from "node:fs"
 
 const ROOT = "/Users/nicolas/Projects_app/Pingo"
 const RENDERER = join(ROOT, "out/renderer/index.html")
-const OUT = join(ROOT, "build/pet-shots")
+const OUT = process.env.PINGO_CAPTURE_DIR || join(ROOT, "build/pet-shots")
 const EXPANDED_SIZE = { width: 392, height: 350 }
 const DETAIL_EXPANDED_SIZE = { width: 464, height: 558 }
 
@@ -24,6 +24,7 @@ const SCENES = [
 
 const ONLY = process.argv.find((arg) => arg.startsWith("--scene="))?.slice("--scene=".length)
 const SHOW_PET_TOGGLE = process.argv.includes("--show-pet-toggle")
+const SHOW_PREVIOUS_MESSAGE = process.argv.includes("--previous-message")
 const targets = ONLY ? SCENES.filter((scene) => scene.name === ONLY) : SCENES
 
 const METRICS_JS = `(() => {
@@ -53,7 +54,8 @@ const METRICS_JS = `(() => {
     layer: rect(layer),
     stack: rect(stack),
     stackOverflow: overflow(stack, "stack"),
-    toggle: rect(document.querySelector(".prompt-stack-toggle")),
+    carouselNav: rect(document.querySelector(".pet-prompt-carousel-nav")),
+    carouselPosition: document.querySelector(".pet-prompt-carousel-nav span")?.textContent?.trim() ?? null,
     composer: rect(document.querySelector(".quick-composer")),
     composerShell: rect(document.querySelector(".quick-composer-shell")),
     textareaHeight: textarea ? Math.round(textarea.getBoundingClientRect().height) : null,
@@ -98,6 +100,11 @@ async function captureScene(scene) {
         return rect ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height - 18) } : null
       })()`)
       if (point) win.webContents.sendInputEvent({ type: "mouseMove", ...point })
+    }
+    if (SHOW_PREVIOUS_MESSAGE) {
+      await win.webContents.executeJavaScript(
+        `document.querySelector('.pet-prompt-carousel-nav button[aria-label="上一条消息"]')?.click()`,
+      )
     }
     await new Promise((resolve) => setTimeout(resolve, 200))
     const metrics = await win.webContents.executeJavaScript(METRICS_JS)

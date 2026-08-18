@@ -147,16 +147,72 @@ button {
   overflow: visible;
 }
 
-/* 多卡时:堆叠收敛为一个分组面板,内部卡片退化为"行",消除卡片墙观感。
-   旧卡显示摘要,最新卡显示完整内容;只有历史卡确实超出窗口时才滚动整个分组。 */
-.pet-prompt-stack--multi {
-  gap: 0;
-  overflow-y: auto;
-  padding: 4px 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 18px;
-  background: var(--surface-raised-translucent);
-  overscroll-behavior: contain;
+.pet-prompt-carousel-nav {
+  display: grid;
+  min-height: 32px;
+  align-self: center;
+  align-items: center;
+  grid-template-columns: 32px minmax(42px, auto) 32px;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--prompt-border);
+  color: var(--text-secondary);
+}
+
+.pet-prompt-carousel-nav button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: currentColor;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease-out,
+    color 140ms ease-out,
+    transform 140ms ease-out;
+}
+
+.pet-prompt-carousel-nav button:hover:not(:disabled) {
+  background: var(--surface-subtle);
+  color: var(--text-primary);
+}
+
+.pet-prompt-carousel-nav button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.pet-prompt-carousel-nav button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.pet-prompt-carousel-nav button:disabled {
+  cursor: default;
+  opacity: 0.28;
+}
+
+.pet-prompt-carousel-nav svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.pet-prompt-carousel-nav span {
+  min-width: 42px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  line-height: 1;
+  text-align: center;
 }
 
 .prompt-count-badge {
@@ -200,38 +256,6 @@ button {
 
 /* 多卡分组面板内:卡片退化为紧凑行,不再携带独立边框/阴影/背景。
    行固定自然高度,绝不被压缩(否则图标会被裁切),空间不足由外层堆叠滚动。 */
-.pet-prompt-stack--multi .pet-prompt {
-  flex: 0 0 auto;
-  padding: 9px 12px 11px;
-  border: 0;
-  border-bottom: 1px solid var(--line-subtle);
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  animation: none;
-}
-
-.pet-prompt-stack--multi .pet-prompt:last-child {
-  border-bottom: 0;
-}
-
-.pet-prompt-stack--multi .pet-prompt-header {
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  column-gap: 9px;
-}
-
-.pet-prompt-stack--multi .pet-prompt-icon {
-  width: 34px;
-  height: 34px;
-  flex-basis: 34px;
-  border-radius: 11px;
-}
-
-.pet-prompt-stack--multi .prompt-icon-svg {
-  width: 18px;
-  height: 18px;
-}
-
 .pet-prompt--progress {
   --prompt-accent: var(--status-info);
   --prompt-border: var(--status-info-border);
@@ -578,7 +602,8 @@ button {
 }
 
 .quick-composer {
-  margin: 10px 12px 0;
+  flex: 0 0 auto;
+  margin: 0 12px;
 }
 
 .quick-composer-shell {
@@ -1340,7 +1365,10 @@ button {
   position: relative;
   right: auto;
   bottom: auto;
+  height: calc(146px + var(--pet-top-clearance, 0px));
+  flex: 0 0 calc(146px + var(--pet-top-clearance, 0px));
   align-self: flex-end;
+  padding-top: var(--pet-top-clearance, 0px);
 }
 
 .app-shell.collapsed .pet-dock {
@@ -1359,8 +1387,8 @@ button {
   place-items: center;
   padding: 0;
   border-radius: 50%;
-  background: var(--surface-raised);
-  box-shadow: 0 5px 14px rgb(15 23 42 / 14%);
+  background: transparent;
+  box-shadow: none;
   color: var(--status-success);
   cursor: pointer;
   opacity: 0;
@@ -1369,9 +1397,7 @@ button {
   transition:
     opacity 120ms ease-out,
     transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
-    background-color 140ms ease-out,
-    color 140ms ease-out,
-    box-shadow 140ms ease-out;
+    color 140ms ease-out;
 }
 
 .pet-dock:hover .pet-prompt-toggle-button,
@@ -1382,9 +1408,9 @@ button {
 }
 
 .pet-prompt-toggle-button:hover {
-  background: var(--status-success-icon);
-  box-shadow: 0 7px 17px rgb(15 23 42 / 17%);
-  color: var(--status-success);
+  background: transparent;
+  box-shadow: none;
+  color: var(--action-primary);
 }
 
 .pet-prompt-toggle-button:active {
@@ -1419,6 +1445,7 @@ button {
   color: #fff;
   cursor: grab;
   transform: scale(var(--pet-scale, 1));
+  transform-origin: 50% 100%;
   user-select: none;
   transition:
     transform 160ms ease,
@@ -1827,6 +1854,7 @@ button {
   .pet-prompt--progress .pet-prompt-label::before,
   .pet-prompt-progress > span,
   .pet-prompt-cancel,
+  .pet-prompt-carousel-nav button,
   .pet-dock,
   .pet-prompt-toggle-button,
   .quick-composer-shell,

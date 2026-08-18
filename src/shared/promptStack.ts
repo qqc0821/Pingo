@@ -1,7 +1,6 @@
 import type { PetNotification, PetPromptItem } from "./types.js"
 
-/** 默认只平铺展示的折叠卡数量,超出部分收进"还有 N 条"分组。
-    小窗口(392×312)内 2 行紧凑卡可无滚动放下,3 行会触发内部滚动。 */
+/** 最近卡片的保留数量。渲染层以独立纸牌叠放或展开列表呈现,不会合并成单一消息框。 */
 export const MAX_VISIBLE_PROMPTS = 2
 /** 同一来源通知在冷却窗内合并为一张卡(更新内容 + 计数)。 */
 export const NOTIFICATION_COOLDOWN_MS = 4000
@@ -125,7 +124,8 @@ export function pushNotification(
         break
       }
     }
-    if (target && now - target.updatedAt <= cooldownMs) {
+    // 相同来源但内容不同仍是一条新消息,必须保留为独立提示卡。
+    if (target && target.content === notification.text && now - target.updatedAt <= cooldownMs) {
       const merged: PetPromptItem = {
         ...target,
         content: notification.text || target.content,

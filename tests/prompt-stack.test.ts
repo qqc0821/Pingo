@@ -79,17 +79,31 @@ test("通知去重键:id 优先于 source,其次文本", () => {
   assert.equal(dedupeKeyFor(notification("")), null)
 })
 
-test("同来源通知在冷却窗内合并:内容更新、计数 +1、不新增卡", () => {
+test("完全重复的同来源通知在冷却窗内合并计数", () => {
   const first = notification("第一条", { source: "dsh:subagent/end" })
-  const second = notification("第二条", { source: "dsh:subagent/end" })
+  const second = notification("第一条", { source: "dsh:subagent/end" })
 
   let stack = pushNotification([], first, { now: 1000 })
   stack = pushNotification(stack, second, { now: 2000 }) // 冷却窗(4s)内
 
   assert.equal(stack.length, 1)
-  assert.equal(stack[0].content, "第二条")
+  assert.equal(stack[0].content, "第一条")
   assert.equal(stack[0].count, 2)
   assert.equal(stack[0].updatedAt, 2000)
+})
+
+test("同来源的不同内容保留为独立提示卡", () => {
+  const first = notification("第一条", { source: "dsh:subagent/end" })
+  const second = notification("第二条", { source: "dsh:subagent/end" })
+
+  let stack = pushNotification([], first, { now: 1000 })
+  stack = pushNotification(stack, second, { now: 2000 })
+
+  assert.equal(stack.length, 2)
+  assert.deepEqual(
+    stack.map((item) => item.content),
+    ["第一条", "第二条"],
+  )
 })
 
 test("超过冷却窗后同源通知成为新卡", () => {

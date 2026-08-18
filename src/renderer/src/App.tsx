@@ -21,7 +21,6 @@ import type {
   TaskState,
 } from "../../shared/types.js"
 import {
-  collapseStack,
   createPromptId,
   pushNotification,
   removePromptItem,
@@ -402,6 +401,7 @@ function PromptCard({
   prompt,
   compact,
   detailOpen,
+  navigation,
   onToggleDetail,
   onDismiss,
   onCancel,
@@ -409,6 +409,12 @@ function PromptCard({
   prompt: PetPromptItem
   compact: boolean
   detailOpen: boolean
+  navigation?: {
+    position: number
+    total: number
+    onPrevious: () => void
+    onNext: () => void
+  }
   onToggleDetail: () => void
   onDismiss: () => void
   onCancel?: () => void
@@ -480,6 +486,33 @@ function PromptCard({
           </button>
         </div>
       </div>
+      {navigation ? (
+        <nav className="pet-prompt-carousel-nav" aria-label="消息切换">
+          <button
+            type="button"
+            aria-label="上一条消息"
+            disabled={navigation.position <= 1}
+            onClick={navigation.onPrevious}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m9.75 3.75-4.25 4.25 4.25 4.25" />
+            </svg>
+          </button>
+          <span aria-live="polite" aria-atomic="true">
+            {navigation.position} / {navigation.total}
+          </span>
+          <button
+            type="button"
+            aria-label="下一条消息"
+            disabled={navigation.position >= navigation.total}
+            onClick={navigation.onNext}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m6.25 3.75 4.25 4.25-4.25 4.25" />
+            </svg>
+          </button>
+        </nav>
+      ) : null}
       {prompt.tone === "progress" ? (
         <span className="pet-prompt-progress" aria-hidden="true">
           <span />
@@ -540,13 +573,18 @@ export function App(): ReactElement {
   const [prompts, setPrompts] = useState<PetPromptItem[]>(
     () => preview?.items ?? readPromptHistory(),
   )
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(() => preview !== null)
+  const [composerOpen, setComposerOpen] = useState(() => {
+    if (!preview) return false
+    return new URLSearchParams(window.location.search).get("composer") === "1"
+  })
   const [expandedCardId, setExpandedCardId] = useState<string | null>(() => {
     if (!preview) return null
     const params = new URLSearchParams(window.location.search)
     if (params.get("detailOpen") !== "1") return null
     return [...preview.items].reverse().find((item) => item.expandable)?.id ?? null
   })
+  const [activePromptId, setActivePromptId] = useState<string | null>(() => expandedCardId)
   const [appearanceScale, setAppearanceScale] = useState(1)
   const [petState, setPetState] = useState<PetState>(() => preview?.petState ?? "idle")
   const [petStateRevision, setPetStateRevision] = useState(0)
@@ -557,11 +595,9 @@ export function App(): ReactElement {
   )
   const petStateTimer = useRef<number | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const stackRef = useRef<HTMLDivElement>(null)
   const petButtonRef = useRef<HTMLButtonElement>(null)
   const isComposingRef = useRef(false)
   const justEndedCompositionRef = useRef(false)
-  const previousPromptCountRef = useRef(prompts.length)
   const promptsRef = useRef(prompts)
   const taskIsActive = useRef(false)
   const activeTaskId = useRef<string | null>(null)
@@ -625,17 +661,6 @@ export function App(): ReactElement {
     void window.pingo?.pet.setDetailExpanded(expanded && expandedCardId !== null)
   }, [expanded, expandedCardId])
 
-  /** 只有新增卡片时滚动到最新;同一任务更新内容不能把卡片顶部滚出窗口。 */
-  useEffect(() => {
-    const previousCount = previousPromptCountRef.current
-    previousPromptCountRef.current = prompts.length
-    const stackElement = stackRef.current
-    if (!stackElement || prompts.length <= previousCount) return
-    window.requestAnimationFrame(() => {
-      stackElement.scrollTop = stackElement.scrollHeight
-    })
-  }, [prompts.length])
-
   useEffect(() => {
     if (preview) return
     const historyById = new Map<string, PetPromptItem>()
@@ -657,7 +682,9 @@ export function App(): ReactElement {
 
   const closeDialog = useCallback((restorePetFocus = true) => {
     setExpanded(false)
+    setComposerOpen(false)
     setExpandedCardId(null)
+    setActivePromptId(null)
     void window.pingo?.pet.setExpanded(false)
     if (restorePetFocus) window.requestAnimationFrame(() => petButtonRef.current?.focus())
   }, [])
@@ -685,18 +712,31 @@ export function App(): ReactElement {
     )
   }, [])
 
-  /** 关闭当前卡片,保留提示框和输入框。 */
-  const dismissPrompt = useCallback((promptId: string) => {
-    const prompt = promptsRef.current.find((item) => item.id === promptId)
-    if (prompt && prompt.tone !== "progress") {
-      closedPromptHistoryRef.current = [
-        ...closedPromptHistoryRef.current.filter((item) => item.id !== promptId),
-        prompt,
-      ]
-    }
-    setExpandedCardId((current) => (current === promptId ? null : current))
-    setPrompts((current) => removePromptItem(current, promptId))
-  }, [])
+  /** 关闭当前卡片;没有消息且输入框未打开时,同时收起空白面板。 */
+  const dismissPrompt = useCallback(
+    (promptId: string) => {
+      const currentPrompts = promptsRef.current
+      const prompt = currentPrompts.find((item) => item.id === promptId)
+      if (prompt && prompt.tone !== "progress") {
+        closedPromptHistoryRef.current = [
+          ...closedPromptHistoryRef.current.filter((item) => item.id !== promptId),
+          prompt,
+        ]
+      }
+      setExpandedCardId((current) => (current === promptId ? null : current))
+      const promptIndex = currentPrompts.findIndex((item) => item.id === promptId)
+      const adjacentPrompt =
+        promptIndex >= 0
+          ? (currentPrompts[promptIndex + 1] ?? currentPrompts[promptIndex - 1])
+          : undefined
+      setActivePromptId((current) =>
+        current === promptId ? (adjacentPrompt?.id ?? null) : current,
+      )
+      setPrompts((current) => removePromptItem(current, promptId))
+      if (currentPrompts.length === 1 && !composerOpen) closeDialog()
+    },
+    [closeDialog, composerOpen],
+  )
 
   const cancelTask = useCallback(() => {
     const taskId = activeTaskId.current
@@ -714,6 +754,8 @@ export function App(): ReactElement {
           ? NOTIFICATION_MOOD_STATE[notification.mood]
           : "happy"
       if (notification.text) {
+        setActivePromptId(null)
+        setExpandedCardId(null)
         setPrompts((current) =>
           pushNotification(current, notification, {
             labelFor: (item) => (item.kind ? NOTIFICATION_KIND_LABELS[item.kind] : "新通知"),
@@ -727,11 +769,21 @@ export function App(): ReactElement {
     })
   }, [showPetState])
 
-  const openDialog = useCallback(() => {
+  const openComposer = useCallback(() => {
     setExpanded(true)
+    setComposerOpen(true)
     void window.pingo?.pet.setExpanded(true)
     window.requestAnimationFrame(() => textareaRef.current?.focus())
   }, [])
+
+  const closeComposer = useCallback(() => {
+    setComposerOpen(false)
+    if (promptsRef.current.length === 0) {
+      closeDialog()
+      return
+    }
+    window.requestAnimationFrame(() => petButtonRef.current?.focus())
+  }, [closeDialog])
 
   const handleTaskEvent = useCallback(
     (event: ChatStreamEvent) => {
@@ -888,6 +940,7 @@ export function App(): ReactElement {
       operationResultBuffer.current = ""
       activeRequestRef.current = content
       setExpandedCardId(null)
+      setActivePromptId(null)
       setDraft("")
       const textareaElement = textareaRef.current
       if (textareaElement) textareaElement.style.height = "auto"
@@ -996,10 +1049,9 @@ export function App(): ReactElement {
         Math.hypot(event.screenX - session.x, event.screenY - session.y) <= POINTER_TAP_THRESHOLD_PX
       ) {
         showPetState("happy", HAPPY_STATE_DURATION_MS)
-        openDialog()
       }
     },
-    [openDialog, showPetState],
+    [showPetState],
   )
 
   const handlePointerCancel = useCallback((event: PointerEvent<HTMLButtonElement>) => {
@@ -1013,9 +1065,8 @@ export function App(): ReactElement {
       if (event.key !== "Enter" && event.key !== " ") return
       event.preventDefault()
       showPetState("happy", HAPPY_STATE_DURATION_MS)
-      openDialog()
     },
-    [openDialog, showPetState],
+    [showPetState],
   )
 
   const handleContextMenu = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
@@ -1023,8 +1074,20 @@ export function App(): ReactElement {
     window.pingo?.pet.showContextMenu()
   }, [])
 
-  const { visible, hidden } = collapseStack(prompts)
-  const stackCards = [...hidden, ...visible]
+  const stackCards = prompts
+  const hasMultiplePromptCards = stackCards.length > 1
+  const requestedPromptIndex = activePromptId
+    ? stackCards.findIndex((item) => item.id === activePromptId)
+    : -1
+  const activePromptIndex = requestedPromptIndex >= 0 ? requestedPromptIndex : stackCards.length - 1
+  const activePrompt = activePromptIndex >= 0 ? stackCards[activePromptIndex] : null
+
+  const selectPrompt = (nextIndex: number): void => {
+    const nextPrompt = stackCards[nextIndex]
+    if (!nextPrompt) return
+    setExpandedCardId(null)
+    setActivePromptId(nextPrompt.id)
+  }
   const composerPlaceholder = isSending
     ? "任务处理中…"
     : newestPrompt?.tone === "error"
@@ -1034,64 +1097,84 @@ export function App(): ReactElement {
   return (
     <main
       className={`app-shell ${expanded ? "expanded" : "collapsed"} ${expandedCardId !== null ? "prompt-detail-open" : ""}`}
-      style={{ "--pet-scale": appearanceScale } as CSSProperties}
+      style={
+        {
+          "--pet-scale": appearanceScale,
+          "--pet-top-clearance": `${Math.max(0, (appearanceScale - 1) * 108)}px`,
+        } as CSSProperties
+      }
     >
       {expanded && (
         <div className="pet-prompt-layer">
-          <div
-            ref={stackRef}
-            className={`pet-prompt-stack ${stackCards.length > 1 ? "pet-prompt-stack--multi" : ""}`}
-          >
-            {stackCards.map((item) => (
+          <div className="pet-prompt-stack">
+            {activePrompt ? (
               <PromptCard
-                key={item.id}
-                prompt={item}
-                compact={item.id !== newestPrompt?.id}
-                detailOpen={expandedCardId === item.id}
-                onToggleDetail={() =>
-                  setExpandedCardId((current) => (current === item.id ? null : item.id))
+                key={activePrompt.id}
+                prompt={activePrompt}
+                compact={activePrompt.id !== newestPrompt?.id}
+                detailOpen={expandedCardId === activePrompt.id}
+                navigation={
+                  hasMultiplePromptCards
+                    ? {
+                        position: activePromptIndex + 1,
+                        total: stackCards.length,
+                        onPrevious: () => selectPrompt(activePromptIndex - 1),
+                        onNext: () => selectPrompt(activePromptIndex + 1),
+                      }
+                    : undefined
                 }
-                onDismiss={() => dismissPrompt(item.id)}
-                onCancel={item.kind === "task" && item.sticky === true ? cancelTask : undefined}
+                onToggleDetail={() =>
+                  setExpandedCardId((current) =>
+                    current === activePrompt.id ? null : activePrompt.id,
+                  )
+                }
+                onDismiss={() => dismissPrompt(activePrompt.id)}
+                onCancel={
+                  activePrompt.kind === "task" && activePrompt.sticky === true
+                    ? cancelTask
+                    : undefined
+                }
               />
-            ))}
+            ) : null}
           </div>
-          <form className="quick-composer" onSubmit={submitMessage}>
-            <label className="visually-hidden" htmlFor="pingo-message">
-              输入给 Pingo 的消息
-            </label>
-            <div className="quick-composer-shell">
-              <textarea
-                ref={textareaRef}
-                id="pingo-message"
-                name="message"
-                rows={1}
-                value={draft}
-                onChange={(event) => handleComposerChange(event.target.value)}
-                onKeyDown={handleDraftKeyDown}
-                onCompositionStart={handleCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-                placeholder={composerPlaceholder}
-                autoComplete="off"
-              />
-              <button type="submit" disabled={!draft.trim() || isSending}>
-                {isSending ? "处理中…" : "发送"}
-              </button>
-            </div>
-          </form>
+          {composerOpen ? (
+            <form className="quick-composer" onSubmit={submitMessage}>
+              <label className="visually-hidden" htmlFor="pingo-message">
+                输入给 Pingo 的消息
+              </label>
+              <div className="quick-composer-shell">
+                <textarea
+                  ref={textareaRef}
+                  id="pingo-message"
+                  name="message"
+                  rows={1}
+                  value={draft}
+                  onChange={(event) => handleComposerChange(event.target.value)}
+                  onKeyDown={handleDraftKeyDown}
+                  onCompositionStart={handleCompositionStart}
+                  onCompositionEnd={handleCompositionEnd}
+                  placeholder={composerPlaceholder}
+                  autoComplete="off"
+                />
+                <button type="submit" disabled={!draft.trim() || isSending}>
+                  {isSending ? "处理中…" : "发送"}
+                </button>
+              </div>
+            </form>
+          ) : null}
         </div>
       )}
       <div className="pet-dock">
         <button
           className="pet-prompt-toggle-button"
           type="button"
-          aria-label={expanded ? "收起提示框" : "展开提示框"}
-          aria-expanded={expanded}
+          aria-label={composerOpen ? "关闭输入框" : "打开输入框"}
+          aria-expanded={composerOpen}
           onClick={() => {
-            if (expanded) {
-              closeDialog()
+            if (composerOpen) {
+              closeComposer()
             } else {
-              openDialog()
+              openComposer()
             }
           }}
         >
