@@ -71,6 +71,14 @@ interface ToolResult {
   detail: string
 }
 
+interface ModelResponse {
+  content?: unknown
+  tool_calls?: Array<{
+    id?: unknown
+    function?: { name?: unknown; arguments?: unknown }
+  }>
+}
+
 function main(): Promise<void> {
   loadEnv()
   const debug = process.argv.includes("--debug")
@@ -144,7 +152,7 @@ async function callModel(
   messages: Record<string, unknown>[],
   apiKey: string,
   debug: boolean,
-): Promise<Record<string, any>> {
+): Promise<ModelResponse> {
   const body = {
     model: modelName(),
     messages,
@@ -183,7 +191,8 @@ function runCommand(args: Record<string, unknown>): ToolResult {
       maxBuffer: 4 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
     })
-    const clipped = output.length > MAX_READ_BYTES ? `${output.slice(0, MAX_READ_BYTES)}\n…(已截断)` : output
+    const clipped =
+      output.length > MAX_READ_BYTES ? `${output.slice(0, MAX_READ_BYTES)}\n…(已截断)` : output
     return {
       content: `退出码 0\n\n${clipped || "(无输出)"}`,
       detail: `已执行（退出码 0，${output.length} 字符输出）`,
@@ -191,7 +200,8 @@ function runCommand(args: Record<string, unknown>): ToolResult {
   } catch (error) {
     const failure = error as { status?: number; stdout?: string; stderr?: string; message?: string }
     const status = failure.status ?? -1
-    const combined = `${failure.stdout ?? ""}${failure.stderr ?? ""}`.trim() || failure.message || ""
+    const combined =
+      `${failure.stdout ?? ""}${failure.stderr ?? ""}`.trim() || failure.message || ""
     return {
       content: `退出码 ${status}\n\n${combined.slice(0, MAX_READ_BYTES)}`,
       detail: `已执行（退出码 ${status}）`,
@@ -201,7 +211,6 @@ function runCommand(args: Record<string, unknown>): ToolResult {
 
 function executeTool(name: string, args: Record<string, unknown>): ToolResult {
   if (name === "run_command") return runCommand(args)
-
 
   if (name === "list_files") {
     const directory = typeof args.directory === "string" ? args.directory : "."
@@ -220,7 +229,8 @@ function executeTool(name: string, args: Record<string, unknown>): ToolResult {
       throw new Error(`文件不存在：${relativePath}`)
     }
     const text = readFileSync(absolutePath, "utf8")
-    const clipped = text.length > MAX_READ_BYTES ? `${text.slice(0, MAX_READ_BYTES)}\n…(已截断)` : text
+    const clipped =
+      text.length > MAX_READ_BYTES ? `${text.slice(0, MAX_READ_BYTES)}\n…(已截断)` : text
     return { content: clipped, detail: `已读取 ${relativePath}（${text.length} 字符）` }
   }
 

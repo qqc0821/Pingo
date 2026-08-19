@@ -21,7 +21,9 @@ import type {
   TaskState,
 } from "../../shared/types.js"
 import {
+  collapseStack,
   createPromptId,
+  movePromptIndex,
   pushNotification,
   removePromptItem,
   taskDedupKey,
@@ -453,19 +455,50 @@ function PromptCard({
           <div id={detailId} className="pet-prompt-content">
             <PromptContent content={displayedContent} summary={showSummary} />
           </div>
-          {canShowDetails ? (
-            <button
-              className="pet-prompt-detail-toggle"
-              type="button"
-              aria-expanded={detailOpen}
-              aria-controls={detailId}
-              onClick={onToggleDetail}
-            >
-              <span>{detailOpen ? "收起详情" : "查看详情"}</span>
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="m4.75 6.25 3.25 3.25 3.25-3.25" />
-              </svg>
-            </button>
+          {canShowDetails || navigation ? (
+            <div className="pet-prompt-footer">
+              {canShowDetails ? (
+                <button
+                  className="pet-prompt-detail-toggle"
+                  type="button"
+                  aria-expanded={detailOpen}
+                  aria-controls={detailId}
+                  onClick={onToggleDetail}
+                >
+                  <span>{detailOpen ? "收起详情" : "查看详情"}</span>
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="m4.75 6.25 3.25 3.25 3.25-3.25" />
+                  </svg>
+                </button>
+              ) : null}
+              {navigation ? (
+                <nav className="pet-prompt-carousel-nav" aria-label="消息切换">
+                  <button
+                    type="button"
+                    aria-label="上一条消息"
+                    disabled={navigation.position <= 1}
+                    onClick={navigation.onPrevious}
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="m9.75 3.75-4.25 4.25 4.25 4.25" />
+                    </svg>
+                  </button>
+                  <span aria-live="polite" aria-atomic="true">
+                    {navigation.position} / {navigation.total}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="下一条消息"
+                    disabled={navigation.position >= navigation.total}
+                    onClick={navigation.onNext}
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="m6.25 3.75 4.25 4.25-4.25 4.25" />
+                    </svg>
+                  </button>
+                </nav>
+              ) : null}
+            </div>
           ) : null}
         </div>
         <div className="pet-prompt-actions">
@@ -486,33 +519,6 @@ function PromptCard({
           </button>
         </div>
       </div>
-      {navigation ? (
-        <nav className="pet-prompt-carousel-nav" aria-label="消息切换">
-          <button
-            type="button"
-            aria-label="上一条消息"
-            disabled={navigation.position <= 1}
-            onClick={navigation.onPrevious}
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="m9.75 3.75-4.25 4.25 4.25 4.25" />
-            </svg>
-          </button>
-          <span aria-live="polite" aria-atomic="true">
-            {navigation.position} / {navigation.total}
-          </span>
-          <button
-            type="button"
-            aria-label="下一条消息"
-            disabled={navigation.position >= navigation.total}
-            onClick={navigation.onNext}
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="m6.25 3.75 4.25 4.25-4.25 4.25" />
-            </svg>
-          </button>
-        </nav>
-      ) : null}
       {prompt.tone === "progress" ? (
         <span className="pet-prompt-progress" aria-hidden="true">
           <span />
@@ -584,7 +590,9 @@ export function App(): ReactElement {
     if (params.get("detailOpen") !== "1") return null
     return [...preview.items].reverse().find((item) => item.expandable)?.id ?? null
   })
-  const [activePromptId, setActivePromptId] = useState<string | null>(() => expandedCardId)
+  const [activePromptId, setActivePromptId] = useState<string | null>(() => {
+    return expandedCardId
+  })
   const [appearanceScale, setAppearanceScale] = useState(1)
   const [petState, setPetState] = useState<PetState>(() => preview?.petState ?? "idle")
   const [petStateRevision, setPetStateRevision] = useState(0)
@@ -943,7 +951,7 @@ export function App(): ReactElement {
       setActivePromptId(null)
       setDraft("")
       const textareaElement = textareaRef.current
-      if (textareaElement) textareaElement.style.height = "auto"
+      if (textareaElement) textareaElement.style.height = "40px"
       setIsSending(true)
       updateTaskCard({
         tone: "progress",
@@ -1012,8 +1020,7 @@ export function App(): ReactElement {
     setDraft(value)
     const element = textareaRef.current
     if (!element) return
-    element.style.height = "auto"
-    element.style.height = `${Math.min(element.scrollHeight, 96)}px`
+    element.style.height = "40px"
   }, [])
 
   const handlePointerDown = useCallback((event: PointerEvent<HTMLButtonElement>) => {
@@ -1074,13 +1081,22 @@ export function App(): ReactElement {
     window.pingo?.pet.showContextMenu()
   }, [])
 
-  const stackCards = prompts
+  const { visible, hidden } = collapseStack(prompts)
+  const stackCards = [...hidden, ...visible]
   const hasMultiplePromptCards = stackCards.length > 1
   const requestedPromptIndex = activePromptId
     ? stackCards.findIndex((item) => item.id === activePromptId)
     : -1
   const activePromptIndex = requestedPromptIndex >= 0 ? requestedPromptIndex : stackCards.length - 1
   const activePrompt = activePromptIndex >= 0 ? stackCards[activePromptIndex] : null
+
+  useEffect(() => {
+    const { visible: currentVisible, hidden: currentHidden } = collapseStack(prompts)
+    const currentCards = [...currentHidden, ...currentVisible]
+    if (activePromptId && !currentCards.some((item) => item.id === activePromptId)) {
+      setActivePromptId(null)
+    }
+  }, [activePromptId, prompts])
 
   const selectPrompt = (nextIndex: number): void => {
     const nextPrompt = stackCards[nextIndex]
@@ -1100,13 +1116,15 @@ export function App(): ReactElement {
       style={
         {
           "--pet-scale": appearanceScale,
-          "--pet-top-clearance": `${Math.max(0, (appearanceScale - 1) * 108)}px`,
+          "--pet-dock-clearance": `${Math.max(0, (appearanceScale - 1) * 108)}px`,
         } as CSSProperties
       }
     >
       {expanded && (
         <div className="pet-prompt-layer">
-          <div className="pet-prompt-stack">
+          <div
+            className={`pet-prompt-stack ${stackCards.length > 1 ? "pet-prompt-stack--multi" : ""}`}
+          >
             {activePrompt ? (
               <PromptCard
                 key={activePrompt.id}
@@ -1118,8 +1136,10 @@ export function App(): ReactElement {
                     ? {
                         position: activePromptIndex + 1,
                         total: stackCards.length,
-                        onPrevious: () => selectPrompt(activePromptIndex - 1),
-                        onNext: () => selectPrompt(activePromptIndex + 1),
+                        onPrevious: () =>
+                          selectPrompt(movePromptIndex(activePromptIndex, -1, stackCards.length)),
+                        onNext: () =>
+                          selectPrompt(movePromptIndex(activePromptIndex, 1, stackCards.length)),
                       }
                     : undefined
                 }

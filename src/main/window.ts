@@ -20,6 +20,7 @@ let petWindow: BrowserWindow | null = null
 let settingsStore: SettingsStore | null = null
 let expanded = false
 let detailExpanded = false
+let petScale = 1
 
 interface DragSession {
   startMouseX: number
@@ -32,17 +33,18 @@ let dragSession: DragSession | null = null
 
 export function createPetWindow(store: SettingsStore): BrowserWindow {
   settingsStore = store
-  const position = getSafePosition(store.getWindowPosition(), COLLAPSED_SIZE)
+  const size = getPetWindowSize(false, false)
+  const position = getSafePosition(store.getWindowPosition(), size)
 
   petWindow = new BrowserWindow({
     x: position.x,
     y: position.y,
-    width: COLLAPSED_SIZE.width,
-    height: COLLAPSED_SIZE.height,
+    width: size.width,
+    height: size.height,
     minWidth: COLLAPSED_SIZE.width,
     minHeight: COLLAPSED_SIZE.height,
     maxWidth: DETAIL_EXPANDED_SIZE.width,
-    maxHeight: DETAIL_EXPANDED_SIZE.height,
+    maxHeight: DETAIL_EXPANDED_SIZE.height + Math.round((1.4 - 1) * 108),
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -122,7 +124,7 @@ export function setPetExpanded(nextExpanded: boolean): void {
 
   const currentBounds = window.getBounds()
   const anchor = getAnchorPosition(currentBounds)
-  const size = nextExpanded ? EXPANDED_SIZE : COLLAPSED_SIZE
+  const size = getPetWindowSize(nextExpanded, false)
   const nextPosition = nextExpanded
     ? getExpandedPosition(anchor, size)
     : getSafePosition(anchor, size)
@@ -140,7 +142,7 @@ export function setPetDetailExpanded(nextExpanded: boolean): void {
 
   const currentBounds = window.getBounds()
   const anchor = getAnchorPosition(currentBounds)
-  const size = nextExpanded ? DETAIL_EXPANDED_SIZE : EXPANDED_SIZE
+  const size = getPetWindowSize(true, nextExpanded)
 
   detailExpanded = nextExpanded
   window.setBounds({ ...getExpandedPosition(anchor, size), ...size }, false)
@@ -203,15 +205,56 @@ export function sendPetNotification(notification: PetNotification): void {
 
 export function setPetPreferences(scale: number, opacity: number): void {
   if (!petWindow) return
+  petScale = Number.isFinite(scale) ? Math.max(0.7, Math.min(scale, 1.4)) : 1
   petWindow.setOpacity(opacity)
-  const appearance: WindowAppearance = { scale }
+  resizePetWindowForScale()
+  const appearance: WindowAppearance = { scale: petScale }
   petWindow.webContents.send("pingo:appearance", appearance)
 }
 
+function resizePetWindowForScale(): void {
+  const window = petWindow
+  if (!window) return
+
+  const size = getPetWindowSize(expanded, detailExpanded)
+  const currentBounds = window.getBounds()
+  if (currentBounds.width === size.width && currentBounds.height === size.height) return
+
+  const nextPosition = getSafePosition(
+    {
+      x: currentBounds.x + currentBounds.width - size.width,
+      y: currentBounds.y + currentBounds.height - size.height,
+    },
+    size,
+  )
+  window.setBounds({ ...nextPosition, ...size }, false)
+  persistAnchorPosition()
+  sendWindowState()
+}
+
+function getPetWindowSize(
+  isExpanded: boolean,
+  isDetailExpanded: boolean,
+): {
+  width: number
+  height: number
+} {
+  const clearance = Math.max(0, Math.round((petScale - 1) * 108))
+  if (!isExpanded) {
+    return {
+      width: COLLAPSED_SIZE.width + clearance,
+      height: COLLAPSED_SIZE.height + clearance,
+    }
+  }
+  const base = isDetailExpanded ? DETAIL_EXPANDED_SIZE : EXPANDED_SIZE
+  return { width: base.width, height: base.height + clearance }
+}
+
 function getAnchorPosition(bounds: Electron.Rectangle): WindowPosition {
+  const collapsedSize = getPetWindowSize(false, false)
   return {
-    x: expanded ? bounds.x + bounds.width - COLLAPSED_SIZE.width : bounds.x,
-    y: expanded ? bounds.y + bounds.height - COLLAPSED_SIZE.height : bounds.y,
+    x: expanded ? bounds.x + bounds.width - collapsedSize.width : bounds.x,
+    y: expanded ? bounds.y + bounds.height - collapsedSize.height : bounds.y,
   }
 }
 
@@ -219,10 +262,11 @@ function getExpandedPosition(
   anchor: WindowPosition,
   size: { width: number; height: number },
 ): WindowPosition {
+  const collapsedSize = getPetWindowSize(false, false)
   return getSafePosition(
     {
-      x: anchor.x - (size.width - COLLAPSED_SIZE.width),
-      y: anchor.y - (size.height - COLLAPSED_SIZE.height),
+      x: anchor.x - (size.width - collapsedSize.width),
+      y: anchor.y - (size.height - collapsedSize.height),
     },
     size,
   )

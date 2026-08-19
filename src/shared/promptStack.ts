@@ -174,6 +174,14 @@ export interface CollapsedStack {
   hidden: PetPromptItem[]
 }
 
+/** 在消息轮播中移动索引,并把首尾边界固定在可用范围内。空列表返回 -1。 */
+export function movePromptIndex(currentIndex: number, offset: number, total: number): number {
+  if (total <= 0) return -1
+  const start = Number.isFinite(currentIndex) ? currentIndex : total - 1
+  const delta = Number.isFinite(offset) ? offset : 0
+  return Math.min(Math.max(Math.trunc(start + delta), 0), total - 1)
+}
+
 /**
  * 计算平铺可见卡与折叠卡:
  * - 最近的 maxVisible 张卡始终可见(堆叠数组顺序为旧→新,末尾最新);

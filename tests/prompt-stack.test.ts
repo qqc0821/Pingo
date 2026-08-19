@@ -5,6 +5,7 @@ import {
   collapseStack,
   createPromptId,
   dedupeKeyFor,
+  movePromptIndex,
   pushNotification,
   removePromptItem,
   taskDedupKey,
@@ -194,4 +195,12 @@ test("collapseStack:折叠只影响展示,不删除卡", () => {
   )
   const { visible, hidden } = collapseStack(stack, { now: 1000, ttlMs: 60_000 })
   assert.equal(visible.length + hidden.length, 6)
+})
+
+test("movePromptIndex:轮播在首尾禁用方向且不越界", () => {
+  assert.equal(movePromptIndex(0, -1, 4), 0)
+  assert.equal(movePromptIndex(3, 1, 4), 3)
+  assert.equal(movePromptIndex(1, -1, 4), 0)
+  assert.equal(movePromptIndex(1, 1, 4), 2)
+  assert.equal(movePromptIndex(0, 1, 0), -1)
 })
