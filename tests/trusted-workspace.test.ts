@@ -166,8 +166,9 @@ test("trusted workspace does not implicitly authorize Terminal", async () => {
     assert.deepEqual(request.capabilities, ["terminal.execute"])
     manager.denyCapability("window-a", taskId)
     await waitFor(() =>
-      events.some((event) => event.type === "task-state" && event.state === "completed"),
+      events.some((event) => event.type === "task-state" && event.state === "failed"),
     )
+    assert.ok(events.some((event) => event.type === "error"))
   } finally {
     globalThis.fetch = previousFetch
     if (previousKey === undefined) delete process.env.MODEL_API_KEY

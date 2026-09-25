@@ -2,13 +2,15 @@ import { app, ipcMain, Menu, shell } from "electron"
 import { dialog } from "electron"
 import type { OpenDialogOptions } from "electron"
 import { realpathSync, statSync } from "node:fs"
+import { randomUUID } from "node:crypto"
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path"
 import type { AppSettings, TrustedWorkspace, UserPreferences } from "../shared/types.js"
 import type {
   Capability,
   CapabilityRequest,
-  ChatMessageInput,
   OperationDecision,
+  TaskRunSnapshot,
+  TaskSubmission,
 } from "../shared/types.js"
 import type { SettingsStore } from "./store.js"
 import { AuditLogger } from "./security/auditLogger.js"
@@ -27,6 +29,7 @@ import {
 } from "./window.js"
 
 export function registerIpcHandlers(settingsStore: SettingsStore): void {
+  let latestRun: TaskRunSnapshot | null = null
   const auditLogger = new AuditLogger(join(app.getPath("userData"), "operation-history.jsonl"))
   const terminalSessionService = new TerminalSessionService()
   terminalSessionService.registerBackend(new SeatbeltTerminalBackend())
@@ -200,13 +203,59 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
 
   ipcMain.handle("task:submit", (event, value: unknown) => {
     assertTrustedSender(event.sender)
-    const messages = parseMessages(value)
-    if (!messages) throw new TypeError("task messages are invalid")
+    const request = parseTaskSubmission(value)
     const sender = event.sender
-    const taskId = taskManager.submit(String(sender.id), messages, (taskEvent) => {
-      if (!sender.isDestroyed()) sender.send("pingo:task-event", taskEvent)
-    })
-    return { taskId }
+    const taskId = randomUUID()
+    let sequence = 0
+    const snapshot: TaskRunSnapshot = {
+      taskId,
+      requestId: request.requestId,
+      content: request.content,
+      events: [],
+    }
+    const previousRun = latestRun
+    latestRun = snapshot
+    try {
+      return taskManager.submitUserInput(
+        String(sender.id),
+        request.content,
+        (taskEvent) => {
+          const envelope = {
+            taskId,
+            requestId: request.requestId,
+            sequence: ++sequence,
+            event: taskEvent,
+          }
+          snapshot.events.push(envelope)
+          if (snapshot.events.length > 128) snapshot.events.shift()
+          if (!sender.isDestroyed()) sender.send("pingo:task-event", envelope)
+        },
+        taskId,
+      )
+    } catch (error) {
+      latestRun = previousRun
+      throw error
+    }
+  })
+
+  ipcMain.handle("task:get-snapshot", (event): TaskRunSnapshot | null => {
+    assertTrustedSender(event.sender)
+    if (!latestRun) return null
+    if (
+      latestRun.events.some(
+        ({ event: item }) =>
+          item.type === "done" || item.type === "cancelled" || item.type === "error",
+      )
+    )
+      return null
+    return latestRun
+  })
+
+  ipcMain.handle("task:new-session", (event): { sessionId: string } => {
+    assertTrustedSender(event.sender)
+    const sessionId = taskManager.startNewConversation(String(event.sender.id))
+    latestRun = null
+    return { sessionId }
   })
 
   ipcMain.on("task:cancel", (event, value: unknown) => {
@@ -328,10 +377,18 @@ function assertTrustedSender(sender: Electron.WebContents): void {
   if (!isTrustedSender(sender)) throw new Error("IPC sender 未获信任")
 }
 
-function parseMessages(value: unknown): ChatMessageInput[] | null {
-  if (!Array.isArray(value) || value.length > 24) return null
-  if (!value.every(isChatMessageInput)) return null
-  return value
+function parseTaskSubmission(value: unknown): TaskSubmission {
+  if (typeof value !== "object" || value === null) throw new TypeError("task request 无效")
+  const request = value as Partial<TaskSubmission>
+  if (
+    typeof request.requestId !== "string" ||
+    !/^[a-zA-Z0-9-]{1,120}$/.test(request.requestId) ||
+    typeof request.content !== "string" ||
+    !request.content.trim() ||
+    request.content.length > 20_000
+  )
+    throw new TypeError("task request 无效")
+  return { requestId: request.requestId, content: request.content.trim() }
 }
 
 function parseOpenPathRequest(value: unknown): { path: string; line?: number; column?: number } {
@@ -353,16 +410,6 @@ function parseOpenPathRequest(value: unknown): { path: string; line?: number; co
     ...(candidate.line === undefined ? {} : { line: candidate.line as number }),
     ...(candidate.column === undefined ? {} : { column: candidate.column as number }),
   }
-}
-
-function isChatMessageInput(value: unknown): value is ChatMessageInput {
-  if (typeof value !== "object" || value === null) return false
-  const message = value as Partial<ChatMessageInput>
-  return (
-    (message.role === "user" || message.role === "assistant" || message.role === "system") &&
-    typeof message.content === "string" &&
-    message.content.length <= 20_000
-  )
 }
 
 function parseCapabilityRequest(value: unknown): CapabilityRequest {

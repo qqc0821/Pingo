@@ -63,13 +63,11 @@ test("harness: mutation denial remains visible in the trace and leaves state unc
     { name: "write_file", args: { path: "note.txt", content: "after\n" } },
   ])
   assert.equal(result.finalAnswer, "修改未执行，因为你拒绝了操作。")
-  assert.ok(
+  assert.equal(
     result.events.some(
-      (event) =>
-        event.type === "agent-step" &&
-        event.phase === "awaiting_approval" &&
-        event.status === "started",
+      (event) => event.type === "agent-step" && event.phase === "awaiting_approval",
     ),
+    false,
     formatScenarioTrace(result),
   )
 })

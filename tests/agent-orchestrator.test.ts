@@ -58,7 +58,7 @@ test("无 toolCalls 时直接结束并发出最终内容和步骤", async () => 
   assert.ok(events.some((event) => event.type === "agent-step" && event.phase === "summarizing"))
 })
 
-test("同轮多个只读工具并行执行，仍按原始调用顺序回填", async () => {
+test("同轮多个只读工具按原始调用顺序执行并回填", async () => {
   let concurrent = 0
   let maxConcurrent = 0
   const observedToolDetails: string[] = []
@@ -101,13 +101,58 @@ test("同轮多个只读工具并行执行，仍按原始调用顺序回填", as
 
   await orchestrator.run([{ role: "user", content: "read both" }])
 
-  assert.equal(maxConcurrent, 2)
+  assert.equal(maxConcurrent, 1)
   assert.deepEqual(observedToolDetails, ["read-a", "read-b"])
   const finalConversation = client.conversations[1] as Array<Record<string, unknown>>
-  assert.deepEqual(finalConversation.slice(-2), [
-    { role: "tool", tool_call_id: "1", content: "content-a" },
-    { role: "tool", tool_call_id: "2", content: "content-b" },
-  ])
+  assert.deepEqual(
+    finalConversation.filter((message) => message.role === "tool"),
+    [
+      { role: "tool", tool_call_id: "1", content: "content-a" },
+      { role: "tool", tool_call_id: "2", content: "content-b" },
+    ],
+  )
+})
+
+test("同轮写后读按原顺序观察写入后的内容", async () => {
+  let content = "before"
+  let modelCalls = 0
+  const calls: string[] = []
+  const client = {
+    async completeWithTools(messages: Array<Record<string, unknown>>) {
+      modelCalls += 1
+      if (modelCalls === 1)
+        return {
+          content: "",
+          toolCalls: [
+            { id: "write", name: "write_file", arguments: "{}" },
+            { id: "read", name: "read_file", arguments: "{}" },
+          ],
+        }
+      assert.deepEqual(
+        messages.slice(-2).map((message) => message.content),
+        ["written", "after"],
+      )
+      return { content: "完成", toolCalls: [] }
+    },
+  }
+  const orchestrator = new AgentOrchestrator({
+    taskId: "ordered-tools",
+    client: client as never,
+    toolDefinitions: [],
+    executeTool: async (name) => {
+      calls.push(name)
+      if (name === "write_file") {
+        content = "after"
+        return { content: "written", detail: "written" }
+      }
+      return { content, detail: content }
+    },
+    isReadOnlyTool: (name) => name === "read_file",
+    emit: () => {},
+    isCancelled: () => false,
+  })
+  await orchestrator.run([{ role: "user", content: "写完后读取" }])
+  assert.deepEqual(calls, ["write_file", "read_file"])
 })
 
 test("变更类工具按原始调用顺序串行执行", async () => {

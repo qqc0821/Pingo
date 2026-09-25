@@ -4,7 +4,6 @@ import { isAbsolute, relative, sep } from "node:path"
 import type {
   ApprovalRequest,
   Capability,
-  ChatMessageInput,
   ChatStreamEvent,
   CapabilityGrant,
   GrantDuration,
@@ -17,6 +16,7 @@ import type {
   TaskState,
 } from "../../shared/types.js"
 import { ModelClient } from "../ai/client.js"
+import type { ModelRequestMessage } from "../ai/client.js"
 import { AgentOrchestrator } from "../agent/orchestrator.js"
 import { AuditLogger } from "../security/auditLogger.js"
 import { ApprovalBroker } from "../security/approvalBroker.js"
@@ -35,11 +35,13 @@ import { SeatbeltTerminalBackend, TerminalRunnerError } from "../terminal/seatbe
 import { TerminalSessionService } from "../terminal/sessionRegistry.js"
 import { getTerminalFeatureFlags, type TerminalFeatureFlags } from "../terminal/featureFlags.js"
 import { executeTool, READ_ONLY_TOOL_NAMES, TOOL_DEFINITIONS } from "../tools/registry.js"
+import type { ToolExecution } from "../tools/types.js"
 import { planFileOperation, type PlannedFileOperation } from "../tools/fileOperations.js"
 import { getRealProjectRoot } from "../security/pathGuard.js"
 import { detectSandboxDenial } from "../terminal/policyCatalog.js"
 import type { SettingsStore } from "../store.js"
 import { UndoManager } from "./undoManager.js"
+import { ConversationStore } from "./conversationStore.js"
 
 export type TaskEventSink = (event: ChatStreamEvent) => void
 
@@ -51,11 +53,15 @@ interface PermissionWaiter {
 interface TaskRecord {
   taskId: string
   sourceWindowId: string
+  projectPath?: string
+  sessionId?: string
   emit: TaskEventSink
   controller: AbortController
   client: ModelClient
   state: TaskState
   cancelled: boolean
+  answer: string
+  unresolvedOperationFailure?: string
   permission?: PermissionWaiter
   activeTerminalSessionId?: string
   cancellationPromise?: Promise<void>
@@ -80,6 +86,7 @@ export interface TaskManagerDependencies {
 
 export class TaskManager {
   private readonly tasks = new Map<string, TaskRecord>()
+  private readonly conversations = new ConversationStore()
   private readonly capabilityManager: CapabilityManager
   private readonly approvalBroker: ApprovalBroker
   private readonly terminalSessionService: TerminalSessionService
@@ -98,24 +105,59 @@ export class TaskManager {
 
   submit(
     sourceWindowId: string,
-    messages: ChatMessageInput[],
+    messages: ModelRequestMessage[],
     emit: TaskEventSink,
-    options?: { taskId?: string },
+    options?: { taskId?: string; projectPath?: string; sessionId?: string },
   ): string {
     const taskId = options?.taskId ?? randomUUID()
     const task: TaskRecord = {
       taskId,
       sourceWindowId,
+      projectPath: options?.projectPath ?? this.getActiveProjectPath(),
+      sessionId: options?.sessionId,
       emit,
       controller: new AbortController(),
       client: new ModelClient(),
       state: "proposed",
       cancelled: false,
+      answer: "",
     }
     this.tasks.set(taskId, task)
     this.emitState(task, "proposed")
     void this.run(task, messages)
     return taskId
+  }
+
+  submitUserInput(
+    sourceWindowId: string,
+    content: string,
+    emit: TaskEventSink,
+    taskId = randomUUID(),
+  ): { taskId: string; sessionId: string } {
+    if (
+      [...this.tasks.values()].some(
+        (task) => task.sourceWindowId === sourceWindowId && !isTerminal(task.state),
+      )
+    ) {
+      throw new Error("当前已有任务在执行")
+    }
+    const projectPath = this.getActiveProjectPath()
+    const session = this.conversations.current(sourceWindowId, projectPath)
+    const messages = this.conversations.messagesFor(sourceWindowId, projectPath, content)
+    this.submit(sourceWindowId, messages, emit, { taskId, projectPath, sessionId: session.id })
+    return { taskId, sessionId: session.id }
+  }
+
+  startNewConversation(sourceWindowId: string): string {
+    if (
+      [...this.tasks.values()].some(
+        (task) => task.sourceWindowId === sourceWindowId && !isTerminal(task.state),
+      )
+    ) {
+      throw new Error("请等待当前任务结束后再开始新对话")
+    }
+    this.conversations.clear(sourceWindowId)
+    return this.conversations.current(sourceWindowId, this.getActiveProjectPath()).id
   }
 
   cancel(taskId: string, sourceWindowId: string): boolean {
@@ -190,7 +232,7 @@ export class TaskManager {
     }
     const execute = async (): Promise<OperationResult> => {
       if (grant.trustedWorkspace) {
-        this.assertTrustedWorkspaceTargets(action.targets)
+        this.assertTrustedWorkspaceTargets(task, action.targets)
       } else {
         if (!grant.grant) throw new Error("撤销授权已失效")
         this.capabilityManager.assertAllowed(
@@ -296,6 +338,7 @@ export class TaskManager {
     this.terminalTrustManager.revokeAll()
     this.approvalBroker.cancelAll()
     this.cancelAll()
+    this.conversations.clear()
   }
 
   getAuditHistory(): ReturnType<AuditLogger["list"]> {
@@ -312,11 +355,11 @@ export class TaskManager {
     this.cancelAll()
   }
 
-  private async run(task: TaskRecord, messages: ChatMessageInput[]): Promise<void> {
+  private async run(task: TaskRecord, messages: ModelRequestMessage[]): Promise<void> {
     this.emitState(task, "planning")
     try {
       this.handleModelEvent(task, { type: "start" })
-      const projectPath = this.getActiveProjectPath()
+      const projectPath = task.projectPath
       const projectName = projectPath
         ? projectPath.split(/[/\\]/).filter(Boolean).at(-1)
         : undefined
@@ -332,8 +375,11 @@ export class TaskManager {
         projectName,
         projectPath,
       })
-      await orchestrator.run(messages)
+      const transcript = await orchestrator.run(messages)
       if (!isTerminal(task.state) && !task.cancelled) {
+        if (transcript && task.sessionId && !task.unresolvedOperationFailure) {
+          this.conversations.complete(task.sourceWindowId, task.sessionId, transcript)
+        }
         this.handleModelEvent(task, { type: "done" })
       }
     } catch (error) {
@@ -346,6 +392,12 @@ export class TaskManager {
   }
 
   private handleModelEvent(task: TaskRecord, event: ChatStreamEvent): void {
+    if (event.type === "chunk") task.answer += event.content
+    if (event.type === "done" && task.unresolvedOperationFailure) {
+      this.emitState(task, "failed")
+      task.emit({ type: "error", message: task.answer.trim() || task.unresolvedOperationFailure })
+      return
+    }
     if (event.type === "error") this.emitState(task, "failed")
     if (event.type === "cancelled") {
       if (!task.cancelled) this.emitState(task, "cancelled")
@@ -374,43 +426,59 @@ export class TaskManager {
     await task.cancellationPromise
   }
 
-  private async executeTool(task: TaskRecord, name: string, args: unknown) {
-    if (task.cancelled) return { content: "任务已取消。", detail: "任务已取消" }
+  private async executeTool(task: TaskRecord, name: string, args: unknown): Promise<ToolExecution> {
+    if (task.cancelled)
+      return { content: "任务已取消。", detail: "任务已取消", status: "cancelled" }
     if (READ_ONLY_TOOL_NAMES.has(name)) {
       const grant = await this.waitForCapability(task, "workspace.read")
-      if (!grant) return deniedExecution("workspace.read")
-      const projectPath = this.requireProjectPath()
+      if (!grant) return this.trackToolExecution(task, deniedExecution("workspace.read"))
+      const projectPath = this.requireProjectPath(task)
       if (grant.grant) this.capabilityManager.consume(grant.grant.grantId)
       const execution = await executeTool(projectPath, name, args)
-      return execution
+      return this.trackToolExecution(task, execution)
     }
-    if (isFileOperation(name)) return this.executeFileOperation(task, name, args)
-    if (name === "terminal_intent") return this.executeTerminalOperation(task, args)
+    if (isFileOperation(name))
+      return this.trackToolExecution(task, await this.executeFileOperation(task, name, args))
+    if (name === "terminal_intent")
+      return this.trackToolExecution(task, await this.executeTerminalOperation(task, args))
     if (name === "terminal_execute") {
-      return {
+      return this.trackToolExecution(task, {
         content:
           "[policy_code=command_forbidden] 命令未执行：旧版通用 Terminal 接口已关闭。请改用 terminal_intent。",
         detail: "policy_code=command_forbidden",
+        status: "denied",
         policyFailure: terminalFailure(
           "command_forbidden",
           "旧版通用 Terminal 接口已关闭",
           false,
           "change_approach",
         ),
-      }
+      })
     }
-    return { content: `工具 ${name} 不被允许。`, detail: `已拒绝未知工具 ${name}` }
+    return this.trackToolExecution(task, {
+      content: `工具 ${name} 不被允许。`,
+      detail: `已拒绝未知工具 ${name}`,
+      status: "denied",
+    })
+  }
+
+  private trackToolExecution(task: TaskRecord, execution: ToolExecution): ToolExecution {
+    if (execution.status === "completed") task.unresolvedOperationFailure = undefined
+    else if (execution.status) {
+      task.unresolvedOperationFailure = execution.content || execution.detail
+    }
+    return execution
   }
 
   private async executeFileOperation(
     task: TaskRecord,
     name: string,
     args: unknown,
-  ): Promise<{ content: string; detail: string }> {
+  ): Promise<ToolExecution> {
     const kind = name as Exclude<OperationKind, "terminal.execute">
     const grant = await this.waitForCapability(task, "workspace.write")
     if (!grant) return deniedExecution("workspace.write")
-    const projectPath = this.requireProjectPath()
+    const projectPath = this.requireProjectPath(task)
     let operation: PlannedFileOperation
     try {
       operation = planFileOperation(
@@ -422,11 +490,15 @@ export class TaskManager {
         (value) => this.approvalBroker.createPlanDigest(value),
       )
     } catch (error) {
-      return { content: `操作未创建：${safeError(error)}`, detail: "文件操作预览失败" }
+      return {
+        content: `操作未创建：${safeError(error)}`,
+        detail: "文件操作预览失败",
+        status: "failed",
+      }
     }
     const execute = async () => {
       if (grant.trustedWorkspace) {
-        this.assertTrustedWorkspaceTargets(operation.plan.targets)
+        this.assertTrustedWorkspaceTargets(task, operation.plan.targets)
       } else {
         this.capabilityManager.assertAllowed(
           "workspace.write",
@@ -451,14 +523,14 @@ export class TaskManager {
         run: operation.undo,
       })
     }
-    return { content: result.content, detail: result.detail }
+    return { content: result.content, detail: result.detail, status: result.status }
   }
 
   private async executeTerminalOperation(
     task: TaskRecord,
     args: unknown,
     options: { forceApproval?: boolean } = {},
-  ): Promise<{ content: string; detail: string; policyFailure?: TerminalPolicyFailure }> {
+  ): Promise<ToolExecution> {
     const grant = await this.waitForCapability(task, "terminal.execute")
     if (!grant || (!grant.grant && !grant.trustedWorkspace))
       return deniedExecution("terminal.execute")
@@ -472,11 +544,12 @@ export class TaskManager {
       return {
         content: `[policy_code=${policyFailure.policy_code}] ${policyFailure.message}`,
         detail: `policy_code=${policyFailure.policy_code}`,
+        status: "denied",
         policyFailure,
       }
     }
     const sessionGrant = grant.grant
-    const projectPath = this.requireProjectPath()
+    const projectPath = this.requireProjectPath(task)
     const operationId = randomUUID()
     let terminalPlan: ResolvedCommandPlan
     try {
@@ -506,6 +579,7 @@ export class TaskManager {
       return {
         content: `[policy_code=${policyFailure.policy_code}] 命令未执行：${policyFailure.message}`,
         detail: `policy_code=${policyFailure.code}`,
+        status: "failed",
         policyFailure,
       }
     }
@@ -534,7 +608,7 @@ export class TaskManager {
         if (!plan.terminalPlan) throw new Error("Terminal 计划缺失")
         revalidateTerminalPlan(projectPath, plan.terminalPlan)
         if (grant.trustedWorkspace) {
-          this.assertTrustedWorkspaceTargets(plan.targets)
+          this.assertTrustedWorkspaceTargets(task, plan.targets)
         } else if (sessionGrant) {
           this.capabilityManager.assertAllowed(
             "terminal.execute",
@@ -609,6 +683,7 @@ export class TaskManager {
         ? `[policy_code=${result.policyFailure.policy_code}] ${result.content}`
         : result.content,
       detail: result.detail,
+      status: result.status,
       ...(result.policyFailure ? { policyFailure: result.policyFailure } : {}),
     }
   }
@@ -667,7 +742,7 @@ export class TaskManager {
                 )
               : terminalFailure("cancelled", "操作已取消，没有创建终端进程", true, "ask_user"),
       }
-      task.emit({ type: "operation-result", result })
+      this.emitOperationResult(task, result)
       this.dependencies.auditLogger.record({
         taskId: task.taskId,
         operationId: plan.operationId,
@@ -695,7 +770,7 @@ export class TaskManager {
       }
       if (!trustUsed) this.emitState(task, "executing")
       const result = await execute()
-      task.emit({ type: "operation-result", result })
+      this.emitOperationResult(task, result)
       this.dependencies.auditLogger.record({
         taskId: task.taskId,
         operationId: plan.operationId,
@@ -718,7 +793,7 @@ export class TaskManager {
         reversible: plan.reversible,
         policyFailure,
       }
-      task.emit({ type: "operation-result", result })
+      this.emitOperationResult(task, result)
       this.dependencies.auditLogger.record({
         taskId: task.taskId,
         operationId: plan.operationId,
@@ -742,7 +817,7 @@ export class TaskManager {
     this.emitState(task, "executing")
     try {
       const result = await execute()
-      task.emit({ type: "operation-result", result })
+      this.emitOperationResult(task, result)
       this.dependencies.auditLogger.record({
         taskId: task.taskId,
         operationId: plan.operationId,
@@ -761,7 +836,7 @@ export class TaskManager {
         detail: safeError(error),
         reversible: plan.reversible,
       }
-      task.emit({ type: "operation-result", result })
+      this.emitOperationResult(task, result)
       this.dependencies.auditLogger.record({
         taskId: task.taskId,
         operationId: plan.operationId,
@@ -825,10 +900,10 @@ export class TaskManager {
     }
   }
 
-  private requireProjectPath(): string {
-    const projectPath = this.getActiveProjectPath()
+  private requireProjectPath(task: TaskRecord): string {
+    const projectPath = task.projectPath
     if (!projectPath) throw new Error("当前项目目录不可访问")
-    return projectPath
+    return getRealProjectRoot(projectPath)
   }
 
   private getActiveProjectPath(): string | undefined {
@@ -859,9 +934,9 @@ export class TaskManager {
     }
   }
 
-  private assertTrustedWorkspaceTargets(targets: string[]): void {
+  private assertTrustedWorkspaceTargets(task: TaskRecord, targets: string[]): void {
     if (this.dependencies.skipUserConfirmation) {
-      const root = this.requireProjectPath()
+      const root = this.requireProjectPath(task)
       if (!targets.every((target) => isWithinRoot(root, target))) {
         throw new Error("操作目标越过当前项目目录")
       }
@@ -884,6 +959,12 @@ export class TaskManager {
       return
     task.state = state
     task.emit({ type: "task-state", taskId: task.taskId, state })
+  }
+
+  private emitOperationResult(task: TaskRecord, result: OperationResult): void {
+    if (result.status === "completed") task.unresolvedOperationFailure = undefined
+    else task.unresolvedOperationFailure = result.content || result.detail
+    task.emit({ type: "operation-result", result })
   }
 
   private getOwnedTask(taskId: string, sourceWindowId: string): TaskRecord | undefined {
@@ -1023,9 +1104,10 @@ function createDefaultTerminalService(): TerminalSessionService {
   return service
 }
 
-function deniedExecution(capability: Capability): { content: string; detail: string } {
+function deniedExecution(capability: Capability): ToolExecution {
   return {
     content: `denied: 用户没有授予 ${capability}，没有执行任何电脑操作。`,
     detail: `权限拒绝：${capability}`,
+    status: "denied",
   }
 }

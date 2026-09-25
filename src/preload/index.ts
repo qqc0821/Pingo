@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron"
 import type {
-  ChatStreamEvent,
+  TaskEventEnvelope,
   PetNotification,
   PingoAPI,
   WindowAppearance,
@@ -38,6 +38,8 @@ const api: PingoAPI = {
   },
   task: {
     submit: (messages) => ipcRenderer.invoke("task:submit", messages),
+    getSnapshot: () => ipcRenderer.invoke("task:get-snapshot"),
+    newSession: () => ipcRenderer.invoke("task:new-session"),
     cancel: (taskId) => ipcRenderer.send("task:cancel", taskId),
     decide: (decision) => ipcRenderer.invoke("task:decide", decision),
     undo: (taskId, undoId) => ipcRenderer.invoke("task:undo", { taskId, undoId }),
@@ -70,7 +72,7 @@ function subscribe(
 ): () => void
 function subscribe(
   channel: "pingo:task-event",
-  listener: (event: ChatStreamEvent) => void,
+  listener: (event: TaskEventEnvelope) => void,
 ): () => void
 function subscribe(channel: string, listener: (...args: never[]) => void): () => void {
   const wrappedListener = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => {

@@ -30,6 +30,7 @@ import {
   type UpsertPromptItemOptions,
 } from "../../shared/promptStack.js"
 import { normalizePromptContent, summarizePromptContent } from "../../shared/promptSummary.js"
+import { advanceTaskEventCursor } from "../../shared/taskEventCursor.js"
 
 type PetImageKey = "idle" | "happy" | "thinking" | "gentle"
 
@@ -608,6 +609,9 @@ export function App(): ReactElement {
   const promptsRef = useRef(prompts)
   const taskIsActive = useRef(false)
   const activeTaskId = useRef<string | null>(null)
+  const activeRequestId = useRef<string | null>(null)
+  const activeEventSequence = useRef(0)
+  const cancelBeforeSubmitReply = useRef(false)
   const taskKey = useRef("")
   const responseBuffer = useRef("")
   const operationResultBuffer = useRef("")
@@ -743,8 +747,37 @@ export function App(): ReactElement {
 
   const cancelTask = useCallback(() => {
     const taskId = activeTaskId.current
-    if (!taskId) return
+    if (!taskId) {
+      cancelBeforeSubmitReply.current = true
+      return
+    }
     void window.pingo?.task.cancel(taskId)
+  }, [])
+
+  const startNewConversation = useCallback(() => {
+    if (taskIsActive.current) return
+    void window.pingo?.task
+      .newSession()
+      .then(() => {
+        const now = Date.now()
+        setPrompts((current) => [
+          ...current,
+          {
+            id: createPromptId("session"),
+            kind: "system",
+            tone: "neutral",
+            label: "新对话",
+            content: "后续消息从空白上下文开始。",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ])
+        setExpandedCardId(null)
+        setActivePromptId(null)
+      })
+      .catch(() => {
+        // The current task may have started before the click reached Main.
+      })
   }, [])
 
   useEffect(() => {
@@ -886,6 +919,7 @@ export function App(): ReactElement {
       }
       if (event.type === "done" || event.type === "cancelled" || event.type === "error") {
         taskIsActive.current = false
+        activeRequestId.current = null
         setIsSending(false)
         activeTaskId.current = null
         const finalResult = responseBuffer.current.trim() || operationResultBuffer.current.trim()
@@ -927,7 +961,43 @@ export function App(): ReactElement {
   useEffect(() => {
     const api = window.pingo
     if (!api) return
-    return api.task.onEvent(handleTaskEvent)
+    const receive = (message: Parameters<Parameters<typeof api.task.onEvent>[0]>[0]) => {
+      if (!activeRequestId.current || !taskIsActive.current) return
+      const cursor = advanceTaskEventCursor(
+        {
+          requestId: activeRequestId.current,
+          taskId: activeTaskId.current,
+          sequence: activeEventSequence.current,
+        },
+        message,
+      )
+      if (!cursor) return
+      activeTaskId.current = cursor.taskId
+      activeEventSequence.current = cursor.sequence
+      handleTaskEvent(message.event)
+    }
+    const unsubscribe = api.task.onEvent(receive)
+    let mounted = true
+    void api.task
+      .getSnapshot()
+      .then((snapshot) => {
+        if (!mounted || !snapshot || taskIsActive.current) return
+        taskIsActive.current = true
+        activeRequestId.current = snapshot.requestId
+        activeTaskId.current = snapshot.taskId
+        activeEventSequence.current = 0
+        activeRequestRef.current = snapshot.content
+        taskKey.current = createPromptId("task")
+        setIsSending(true)
+        for (const event of snapshot.events) receive(event)
+      })
+      .catch(() => {
+        // A failed state query must not interrupt ordinary task events.
+      })
+    return () => {
+      mounted = false
+      unsubscribe()
+    }
   }, [handleTaskEvent])
 
   const submitMessage = useCallback(
@@ -937,6 +1007,10 @@ export function App(): ReactElement {
       if (!content || isSending) return
 
       taskIsActive.current = true
+      const requestId = crypto.randomUUID()
+      activeRequestId.current = requestId
+      activeEventSequence.current = 0
+      cancelBeforeSubmitReply.current = false
       activeTaskId.current = null
       taskKey.current = createPromptId("task")
       responseBuffer.current = ""
@@ -956,13 +1030,16 @@ export function App(): ReactElement {
       showPetState("thinking")
 
       void window.pingo?.task
-        .submit([{ role: "user", content }])
+        .submit({ requestId, content })
         .then(({ taskId }) => {
+          if (activeRequestId.current !== requestId) return
           activeTaskId.current = taskId
+          if (cancelBeforeSubmitReply.current) void window.pingo?.task.cancel(taskId)
         })
         .catch(() => {
-          if (!taskIsActive.current) return
+          if (!taskIsActive.current || activeRequestId.current !== requestId) return
           taskIsActive.current = false
+          activeRequestId.current = null
           setIsSending(false)
           activeTaskId.current = null
           updateTaskCard({
@@ -1156,6 +1233,16 @@ export function App(): ReactElement {
                 输入给 Pingo 的消息
               </label>
               <div className="quick-composer-shell">
+                <button
+                  className="quick-composer-new-session"
+                  type="button"
+                  aria-label="开始新对话"
+                  title="开始新对话"
+                  disabled={isSending}
+                  onClick={startNewConversation}
+                >
+                  新
+                </button>
                 <textarea
                   ref={textareaRef}
                   id="pingo-message"

@@ -94,6 +94,25 @@ export type ChatStreamEvent =
   | { type: "cancelled" }
   | { type: "error"; message: string }
 
+export interface TaskEventEnvelope {
+  taskId: string
+  requestId: string
+  sequence: number
+  event: ChatStreamEvent
+}
+
+export interface TaskSubmission {
+  requestId: string
+  content: string
+}
+
+export interface TaskRunSnapshot {
+  taskId: string
+  requestId: string
+  content: string
+  events: TaskEventEnvelope[]
+}
+
 export interface OperationProgressEvent {
   type: "operation-progress"
   operationId: string
@@ -484,13 +503,15 @@ export interface PingoAPI {
     update: (settings: UserPreferences) => Promise<AppSettings>
   }
   task: {
-    submit: (messages: ChatMessageInput[]) => Promise<{ taskId: string }>
+    submit: (request: TaskSubmission) => Promise<{ taskId: string; sessionId: string }>
+    getSnapshot: () => Promise<TaskRunSnapshot | null>
+    newSession: () => Promise<{ sessionId: string }>
     cancel: (taskId: string) => void
     decide: (decision: OperationDecision) => Promise<OperationResult | null>
     undo: (taskId: string, undoId: string) => Promise<OperationResult | null>
     grant: (request: CapabilityRequest) => Promise<CapabilityGrant | null>
     deny: (taskId: string) => Promise<boolean>
-    onEvent: (listener: (event: ChatStreamEvent) => void) => () => void
+    onEvent: (listener: (event: TaskEventEnvelope) => void) => () => void
   }
   audit: {
     list: () => Promise<AuditRecord[]>

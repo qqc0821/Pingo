@@ -733,6 +733,19 @@ button {
   opacity: 0.45;
 }
 
+.quick-composer .quick-composer-new-session {
+  flex: 0 0 28px;
+  min-height: 28px;
+  margin: 0 0 0 5px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.quick-composer .quick-composer-new-session:hover:not(:disabled) {
+  background: var(--surface-raised-translucent);
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

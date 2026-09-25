@@ -23,11 +23,11 @@ export interface ToolConversationOptions {
 }
 
 export function buildToolConversation(
-  messages: ChatMessageInput[],
+  messages: ModelRequestMessage[],
   options: ToolConversationOptions | number = {},
 ): ModelRequestMessage[] {
   const normalized = typeof options === "number" ? { maxHistory: options } : (options ?? {})
-  const maxHistory = normalized.maxHistory ?? 24
+  const maxHistory = normalized.maxHistory ?? 64
   const parts = [TOOL_SYSTEM_CONTENT]
   if (normalized.projectAuthorized) {
     const name = normalized.projectName?.trim()

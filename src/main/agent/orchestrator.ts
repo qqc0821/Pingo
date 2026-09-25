@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import type { ChatMessageInput, ChatStreamEvent } from "../../shared/types.js"
+import type { ChatStreamEvent } from "../../shared/types.js"
 import type { ModelClient, ModelRequestMessage, ToolCall } from "../ai/client.js"
 import { parseToolArguments } from "../ai/client.js"
 import {
@@ -43,16 +43,17 @@ export class AgentOrchestrator {
     this.observationBudget = deps.observationBudget ?? DEFAULT_OBSERVATION_BUDGET
   }
 
-  async run(messages: ChatMessageInput[]): Promise<void> {
+  async run(messages: ModelRequestMessage[]): Promise<ModelRequestMessage[] | null> {
     const conversation = buildToolConversation(messages, {
       projectAuthorized: this.deps.projectAuthorized,
       projectName: this.deps.projectName,
       projectPath: this.deps.projectPath,
     })
+    const turnStart = conversation.length - 1
     let nudgesUsed = 0
 
     for (let loopIndex = 0; loopIndex < this.maxToolLoops; loopIndex += 1) {
-      if (this.deps.isCancelled()) return
+      if (this.deps.isCancelled()) return null
 
       const modelStepId = randomUUID()
       this.emitStep({
@@ -76,7 +77,7 @@ export class AgentOrchestrator {
         })
         throw error
       }
-      if (this.deps.isCancelled()) return
+      if (this.deps.isCancelled()) return null
 
       this.emitStep({
         stepId: modelStepId,
@@ -148,7 +149,8 @@ export class AgentOrchestrator {
             status: "completed",
             title: "已整理回答",
           })
-          return
+          conversation.push({ role: "assistant", content: result.content || "" })
+          return conversation.slice(turnStart)
         }
       }
 
@@ -159,12 +161,13 @@ export class AgentOrchestrator {
         tool_calls: toolCalls.map(toModelToolCall),
       })
       await this.runToolBatch(conversation, toolCalls, loopIndex)
-      if (this.deps.isCancelled()) return
+      if (this.deps.isCancelled()) return null
     }
 
     if (!this.deps.isCancelled()) {
       this.deps.emit({ type: "error", message: TOO_MANY_TOOL_LOOPS_MESSAGE })
     }
+    return null
   }
 
   private async runToolBatch(
@@ -175,8 +178,6 @@ export class AgentOrchestrator {
     const stepId = randomUUID()
     const tracker = createObservationTracker(this.observationBudget)
     const executions = new Map<string, ToolExecution>()
-    const readOnlyCalls = toolCalls.filter((call) => this.deps.isReadOnlyTool(call.name))
-    const mutatingCalls = toolCalls.filter((call) => !this.deps.isReadOnlyTool(call.name))
 
     this.emitStep({
       stepId,
@@ -187,15 +188,8 @@ export class AgentOrchestrator {
       toolNames: toolCalls.map((call) => call.name),
     })
 
-    const readOnlyResults = await Promise.all(
-      readOnlyCalls.map(async (call) => ({
-        id: call.id,
-        execution: await this.deps.executeTool(call.name, parseToolArguments(call.arguments)),
-      })),
-    )
-    for (const result of readOnlyResults) executions.set(result.id, result.execution)
-
-    for (const call of mutatingCalls) {
+    // Calls in one model response may depend on earlier calls (for example write then read).
+    for (const call of toolCalls) {
       if (this.deps.isCancelled()) {
         this.emitStep({
           stepId,
@@ -206,25 +200,8 @@ export class AgentOrchestrator {
         })
         return
       }
-      const approvalStepId = randomUUID()
-      this.emitStep({
-        stepId: approvalStepId,
-        loopIndex,
-        phase: "awaiting_approval",
-        status: "started",
-        title: "等待操作确认",
-        toolNames: [call.name],
-      })
       const execution = await this.deps.executeTool(call.name, parseToolArguments(call.arguments))
       executions.set(call.id, execution)
-      this.emitStep({
-        stepId: approvalStepId,
-        loopIndex,
-        phase: "awaiting_approval",
-        status: "completed",
-        title: "操作确认已处理",
-        toolNames: [call.name],
-      })
     }
 
     let emittedBudgetExceeded = false

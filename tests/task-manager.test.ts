@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
+import { spawnSync } from "node:child_process"
 import test from "node:test"
 import { AuditLogger } from "../src/main/security/auditLogger.js"
 import { TaskManager } from "../src/main/tasks/taskManager.js"
@@ -222,7 +223,16 @@ test("desktop auto mode executes project writes without permission or approval e
   }
 })
 
-test("terminal_intent uses the real approval, script binding, Seatbelt runner, and one-time decision chain", async () => {
+test("terminal_intent uses the real approval, script binding, Seatbelt runner, and one-time decision chain", async (context) => {
+  const seatbelt = spawnSync(
+    "/usr/bin/sandbox-exec",
+    ["-p", "(version 1) (allow default)", "/usr/bin/true"],
+    { stdio: "ignore" },
+  )
+  if (seatbelt.status !== 0) {
+    context.skip("当前环境禁止 sandbox-exec，无法运行真实 Seatbelt 集成场景")
+    return
+  }
   const previousFetch = globalThis.fetch
   const previousKey = process.env.MODEL_API_KEY
   const root = mkdtempSync(join(tmpdir(), "pingo-terminal-task-"))
