@@ -12,5 +12,6 @@ export interface ToolDefinition {
 export interface ToolExecution {
   content: string
   detail: string
+  status?: "completed" | "failed" | "denied" | "expired" | "cancelled"
   policyFailure?: TerminalPolicyFailure
 }

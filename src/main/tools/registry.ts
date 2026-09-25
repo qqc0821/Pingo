@@ -149,9 +149,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
 ]
 
 export const READ_ONLY_TOOL_NAMES = new Set(["list_files", "search_files", "read_file"])
-export const READ_ONLY_TOOL_DEFINITIONS = TOOL_DEFINITIONS.filter((definition) =>
-  READ_ONLY_TOOL_NAMES.has(definition.function.name),
-)
 
 export async function executeTool(
   projectPath: string | undefined,
@@ -162,6 +159,7 @@ export async function executeTool(
     return {
       content: "当前项目目录不可用，请检查项目位置后重试。",
       detail: "项目目录不可用",
+      status: "failed",
     }
   }
 
@@ -170,6 +168,7 @@ export async function executeTool(
       return {
         content: `工具 ${name} 不支持直接执行。`,
         detail: `已阻止未接入执行器的工具 ${name}`,
+        status: "denied",
       }
     }
     switch (name) {
@@ -182,11 +181,19 @@ export async function executeTool(
         return { content: readFile(projectPath, args), detail: `正在读取 ${path}` }
       }
       default:
-        return { content: `不允许执行工具：${name}`, detail: `已拒绝未知工具 ${name}` }
+        return {
+          content: `不允许执行工具：${name}`,
+          detail: `已拒绝未知工具 ${name}`,
+          status: "denied",
+        }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "工具执行失败"
-    return { content: describeToolFailure(error, message), detail: `读取被拒绝：${message}` }
+    return {
+      content: describeToolFailure(error, message),
+      detail: `读取被拒绝：${message}`,
+      status: "failed",
+    }
   }
 }
 

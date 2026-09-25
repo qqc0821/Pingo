@@ -2,7 +2,6 @@ import type {
   ActionGrammar,
   IntentPackDefinition,
   TerminalExecutableName,
-  TerminalIntent,
   TerminalSandboxTier,
 } from "../../shared/types.js"
 import { QUALITY_SCRIPT_NAMES } from "./projectScript.js"
@@ -263,13 +262,6 @@ export function buildTerminalIntentSchema(): Record<string, unknown> {
     required: ["kind", "cwd"],
     additionalProperties: false,
   }
-}
-
-export function intentKind(value: unknown): value is TerminalIntent["kind"] {
-  return (
-    typeof value === "string" &&
-    INTENT_PACK_DEFINITIONS.some((definition) => definition.kind === value)
-  )
 }
 
 function isAllowedExecutableName(value: string): value is TerminalExecutableName {

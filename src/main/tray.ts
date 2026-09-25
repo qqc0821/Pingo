@@ -1,5 +1,5 @@
 import { app, Menu, nativeImage, Tray } from "electron"
-import { getPetWindow, hidePetWindow, sendSettingsRequest, showPetWindow } from "./window.js"
+import { getPetWindow, hidePetWindow, showPetWindow } from "./window.js"
 
 let tray: Tray | null = null
 
@@ -11,8 +11,6 @@ export function createTray(): Tray {
     Menu.buildFromTemplate([
       { label: "显示 Pingo", click: showPetWindow },
       { label: "隐藏 Pingo", click: hidePetWindow },
-      { type: "separator" },
-      { label: "设置", click: sendSettingsRequest },
       { type: "separator" },
       { label: "退出 Pingo", click: () => app.quit() },
     ]),

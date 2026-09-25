@@ -1,0 +1,24 @@
+{
+  "name": "dsh-plugin-pet-notify",
+  "version": "1.0.0",
+  "description": "DeepSeek Harness 通知桥接插件:监听 DSH 的会话/子代理/目标事件,自动推送给 AI 桌面宠物(Pingo)。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "pet",
+    "notification",
+    "pingo"
+  ],
+  "license": "MIT",
+  "files": [
+    "lib/index.js",
+    "README.md"
+  ]
+}

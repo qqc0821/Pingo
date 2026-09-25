@@ -1,5 +1,5 @@
 /**
- * 部分模型（已知 deepseek-chat / V4 系列）会把工具调用当成普通文本写进 content，
+ * 部分模型（包括 DeepSeek V4 系列）会把工具调用当成普通文本写进 content，
  * tool_calls 字段为空且 finish_reason 仍是 stop。这里做一次结构化恢复。
  */
 

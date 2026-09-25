@@ -4,12 +4,14 @@ import type { TrustedWorkspace, UserPreferences, WindowPosition } from "../share
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
   modelBaseUrl: "https://api.deepseek.com/v1/chat/completions",
-  modelName: "deepseek-chat",
+  modelName: "deepseek-v4-pro",
   defaultLocation: "",
   petScale: 1,
   transparency: 1,
   launchAtLogin: false,
 }
+
+const LEGACY_DEEPSEEK_MODELS = new Set(["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"])
 
 interface PersistedSettings {
   windowPosition?: WindowPosition
@@ -75,7 +77,11 @@ export class SettingsStore {
   }
 
   getPreferences(): UserPreferences {
-    return { ...DEFAULT_PREFERENCES, ...this.data.preferences }
+    const preferences = { ...DEFAULT_PREFERENCES, ...this.data.preferences }
+    if (LEGACY_DEEPSEEK_MODELS.has(preferences.modelName)) {
+      preferences.modelName = DEFAULT_PREFERENCES.modelName
+    }
+    return preferences
   }
 
   setPreferences(preferences: UserPreferences): void {

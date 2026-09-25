@@ -6,8 +6,6 @@ import type {
   OperationPlan,
 } from "../../shared/types.js"
 
-export const APPROVAL_TTL_MS = 60_000
-
 interface PendingApproval {
   request: ApprovalRequest
   resolve: (decision: BrokerDecision) => void
@@ -141,10 +139,6 @@ export class ApprovalBroker {
     }
   }
 
-  hasPending(operationId: string): boolean {
-    return this.pending.has(operationId)
-  }
-
   wasDenied(taskId: string, digest: string): boolean {
     return this.deniedDigests.get(taskId)?.has(digest) ?? false
   }
@@ -162,10 +156,6 @@ function stableJson(value: unknown): string {
 function deepFreezePlan(plan: OperationPlan): OperationPlan {
   Object.freeze(plan.preconditions)
   Object.freeze(plan.targets)
-  if (plan.command) {
-    Object.freeze(plan.command.args)
-    Object.freeze(plan.command)
-  }
   if (plan.terminalPlan) {
     Object.freeze(plan.terminalPlan.intent)
     Object.freeze(plan.terminalPlan.argv)

@@ -10,9 +10,51 @@ export type PetState =
   | "focus"
   | "celebrate"
 
-export interface PetStateEvent {
-  state: PetState
-  durationMs?: number
+/** 外部(DSH / MCP)推送的一条宠物通知。 */
+export interface PetNotification {
+  text: string
+  mood?: "happy" | "sad" | "excited" | "sleepy" | "angry" | "neutral"
+  action?: "dance" | "wave" | "jump" | "sleep" | "idle"
+  /** 外部提供的稳定 ID(可选,用于精确去重)。 */
+  id?: string
+  /** 去重键(可选),如 "dsh:turn/end"、"dsh:goal/complete"。 */
+  source?: string
+  /** 通知分类(可选),用于渲染分类标签与 tone。 */
+  kind?: PetNotificationKind
+}
+
+export type PetNotificationKind = "turn" | "subagent" | "goal" | "mcp" | "system"
+
+/** 提示卡的语气,决定图标、配色与 live region 模式。 */
+export type PromptTone = "neutral" | "progress" | "success" | "warning" | "error"
+
+/** 提示卡大类,决定轮播与关闭语义。 */
+export type PetPromptKind = "task" | "notification" | "mcp" | "approval" | "result" | "system"
+
+/** 渲染层提示卡。任务进度与外部通知都归一为这种卡片。 */
+export interface PetPromptItem {
+  /** 渲染与关闭用的稳定 id。 */
+  id: string
+  kind: PetPromptKind
+  tone: PromptTone
+  label: string
+  content: string
+  /** 卡片直接展示的完整简述;缺省时回退到 content。 */
+  summary?: string
+  /** 内容较长时允许展开查看完整结果。 */
+  expandable?: boolean
+  createdAt: number
+  updatedAt: number
+  /** 去重键:同 key 的卡片原地更新而不是新增。 */
+  dedupKey?: string
+  /** 任务卡:按 taskId 原地更新。 */
+  taskId?: string
+  /** sticky 卡(任务进度)不参与自动折叠。 */
+  sticky?: boolean
+  /** 合并计数:同一来源短时间多条时显示 "×N"。 */
+  count?: number
+  /** 关联的外部通知(可选,保留来源信息以便追溯)。 */
+  notification?: PetNotification
 }
 export type ChatMessageRole = "user" | "assistant" | "system"
 
@@ -51,6 +93,25 @@ export type ChatStreamEvent =
   | { type: "done" }
   | { type: "cancelled" }
   | { type: "error"; message: string }
+
+export interface TaskEventEnvelope {
+  taskId: string
+  requestId: string
+  sequence: number
+  event: ChatStreamEvent
+}
+
+export interface TaskSubmission {
+  requestId: string
+  content: string
+}
+
+export interface TaskRunSnapshot {
+  taskId: string
+  requestId: string
+  content: string
+  events: TaskEventEnvelope[]
+}
 
 export interface OperationProgressEvent {
   type: "operation-progress"
@@ -233,27 +294,6 @@ export interface TerminalPolicyFailure {
   requiredAction?: "ask_user" | "change_approach" | "stop"
 }
 
-export interface TerminalRunRecord {
-  runId: string
-  operationId: string
-  taskId: string
-  intentKind: string
-  intentAction?: string
-  argv: string[]
-  cwdRelative: string
-  planDigest: string
-  fingerprint: string
-  status: OperationResult["status"]
-  exitCode?: number | null
-  policyCode?: TerminalPolicyCode
-  durationMs: number
-  outputBytes: number
-  outputRedacted: string
-  truncated: boolean
-  startedAt: number
-  finishedAt: number
-}
-
 export interface CapabilityGrant {
   grantId: string
   capabilities: Capability[]
@@ -280,15 +320,6 @@ export interface FileStatePrecondition {
   size?: number
 }
 
-export interface CommandPlan {
-  executable: string
-  args: string[]
-  cwd: string
-  timeoutMs: number
-  outputLimitBytes: number
-  envKeys: string[]
-}
-
 export interface OperationPlan {
   operationId: string
   taskId: string
@@ -299,7 +330,6 @@ export interface OperationPlan {
   riskReason: string
   targets: string[]
   preview: string
-  command?: CommandPlan
   terminalPlan?: ResolvedCommandPlan
   preconditions: FileStatePrecondition[]
   digest: string
@@ -421,15 +451,6 @@ export interface WindowPosition {
   y: number
 }
 
-export interface WindowState {
-  expanded: boolean
-  position: WindowPosition
-  size: {
-    width: number
-    height: number
-  }
-}
-
 export interface ProjectInfo {
   path: string
   name: string
@@ -462,10 +483,8 @@ export interface PingoAPI {
     dragStart: (screenX: number, screenY: number) => void
     dragMove: (screenX: number, screenY: number) => void
     dragEnd: () => void
-    onWindowState: (listener: (state: WindowState) => void) => () => void
-    onSettingsRequest: (listener: () => void) => () => void
     onAppearance: (listener: (appearance: WindowAppearance) => void) => () => void
-    onStateChange: (listener: (event: PetStateEvent) => void) => () => void
+    onNotification: (listener: (notification: PetNotification) => void) => () => void
   }
   project: {
     get: () => Promise<ProjectInfo | null>
@@ -484,13 +503,15 @@ export interface PingoAPI {
     update: (settings: UserPreferences) => Promise<AppSettings>
   }
   task: {
-    submit: (messages: ChatMessageInput[]) => Promise<{ taskId: string }>
+    submit: (request: TaskSubmission) => Promise<{ taskId: string; sessionId: string }>
+    getSnapshot: () => Promise<TaskRunSnapshot | null>
+    newSession: () => Promise<{ sessionId: string }>
     cancel: (taskId: string) => void
     decide: (decision: OperationDecision) => Promise<OperationResult | null>
     undo: (taskId: string, undoId: string) => Promise<OperationResult | null>
     grant: (request: CapabilityRequest) => Promise<CapabilityGrant | null>
     deny: (taskId: string) => Promise<boolean>
-    onEvent: (listener: (event: ChatStreamEvent) => void) => () => void
+    onEvent: (listener: (event: TaskEventEnvelope) => void) => () => void
   }
   audit: {
     list: () => Promise<AuditRecord[]>
@@ -502,13 +523,5 @@ export interface PingoAPI {
   terminalTrust: {
     list: () => Promise<TerminalTrustGrant[]>
     revokeAll: () => Promise<void>
-  }
-  terminalRuns: {
-    list: (query?: string, limit?: number) => Promise<TerminalRunRecord[]>
-    rerun: (runId: string) => Promise<{ taskId: string }>
-    diff: (
-      leftRunId: string,
-      rightRunId: string,
-    ) => Promise<{ left: string; right: string; different: boolean } | null>
   }
 }
