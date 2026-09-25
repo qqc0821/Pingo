@@ -1,11 +1,7 @@
 import type { PetNotification, PetPromptItem } from "./types.js"
 
-/** 最近卡片的保留数量。渲染层以独立纸牌叠放或展开列表呈现,不会合并成单一消息框。 */
-export const MAX_VISIBLE_PROMPTS = 2
 /** 同一来源通知在冷却窗内合并为一张卡(更新内容 + 计数)。 */
 export const NOTIFICATION_COOLDOWN_MS = 4000
-/** 非 sticky 通知卡超过该时长后自动折入"更多"分组(仅折叠,不删除)。 */
-export const NOTIFICATION_FOLD_TTL_MS = 60000
 /** 外部 id / source 的合理上限,超出截断。 */
 export const MAX_SOURCE_LENGTH = 64
 
@@ -17,7 +13,7 @@ export function createPromptId(prefix: string): string {
   return `${prefix}-${nextPromptId}-${Date.now().toString(36)}`
 }
 
-/** 任务卡的去重键:一次任务 = 一张卡。 */
+/** 任务卡的去重键:同一任务始终更新同一张卡。 */
 export function taskDedupKey(taskId: string): string {
   return `task:${taskId}`
 }
@@ -49,7 +45,7 @@ export interface UpsertPromptItemOptions {
 /**
  * 按 dedupKey 原地更新或追加一张卡。
  * 已存在:更新字段并刷新 updatedAt,保留原位置与 id。
- * 不存在:追加到末尾(堆叠中末尾 = 最新,紧贴宠物)。
+ * 不存在:追加到末尾(列表末尾 = 最新)。
  */
 export function upsertPromptItem(
   stack: PetPromptItem[],
@@ -161,54 +157,10 @@ export function removePromptItem(stack: PetPromptItem[], id: string): PetPromptI
   return stack.filter((item) => item.id !== id)
 }
 
-export interface CollapseStackOptions {
-  maxVisible?: number
-  now?: number
-  ttlMs?: number
-}
-
-export interface CollapsedStack {
-  /** 平铺展示的卡(顺序保持:最新在末尾)。 */
-  visible: PetPromptItem[]
-  /** 折入"更多"分组的卡。 */
-  hidden: PetPromptItem[]
-}
-
 /** 在消息轮播中移动索引,并把首尾边界固定在可用范围内。空列表返回 -1。 */
 export function movePromptIndex(currentIndex: number, offset: number, total: number): number {
   if (total <= 0) return -1
   const start = Number.isFinite(currentIndex) ? currentIndex : total - 1
   const delta = Number.isFinite(offset) ? offset : 0
   return Math.min(Math.max(Math.trunc(start + delta), 0), total - 1)
-}
-
-/**
- * 计算平铺可见卡与折叠卡:
- * - 最近的 maxVisible 张卡始终可见(堆叠数组顺序为旧→新,末尾最新);
- * - 其余卡折入 hidden;非 sticky 卡超过 TTL 后也折入 hidden(仅折叠,不删除)。
- */
-export function collapseStack(
-  stack: PetPromptItem[],
-  options: CollapseStackOptions = {},
-): CollapsedStack {
-  const now = options.now ?? Date.now()
-  const maxVisible = options.maxVisible ?? MAX_VISIBLE_PROMPTS
-  const ttlMs = options.ttlMs ?? NOTIFICATION_FOLD_TTL_MS
-
-  const visible: PetPromptItem[] = []
-  const hidden: PetPromptItem[] = []
-  for (let i = stack.length - 1; i >= 0; i--) {
-    const item = stack[i]
-    if (!item) continue
-    const expired = !item.sticky && now - item.updatedAt > ttlMs
-    if (expired || visible.length >= maxVisible) {
-      hidden.push(item)
-    } else {
-      visible.push(item)
-    }
-  }
-  // 收集时是最新在前,翻转回时间顺序(旧→新,最新在末尾)。
-  visible.reverse()
-  hidden.reverse()
-  return { visible, hidden }
 }

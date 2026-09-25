@@ -40,7 +40,6 @@ import { getRealProjectRoot } from "../security/pathGuard.js"
 import { detectSandboxDenial } from "../terminal/policyCatalog.js"
 import type { SettingsStore } from "../store.js"
 import { UndoManager } from "./undoManager.js"
-import type { TerminalRunLedgerRecord, TerminalRunStore } from "../terminal/runStore.js"
 
 export type TaskEventSink = (event: ChatStreamEvent) => void
 
@@ -77,7 +76,6 @@ export interface TaskManagerDependencies {
   terminalFeatureFlags?: TerminalFeatureFlags
   terminalTrustManager?: TerminalTrustManager
   terminalSessionService?: TerminalSessionService
-  terminalRunStore?: Pick<TerminalRunStore, "recordTerminalRun" | "getTerminalRun">
 }
 
 export class TaskManager {
@@ -118,25 +116,6 @@ export class TaskManager {
     this.emitState(task, "proposed")
     void this.run(task, messages)
     return taskId
-  }
-
-  rerunTerminalRun(sourceWindowId: string, runId: string, emit: TaskEventSink): { taskId: string } {
-    const record = this.dependencies.terminalRunStore?.getTerminalRun(runId)
-    if (!record) throw new Error("运行记录不存在")
-    const taskId = randomUUID()
-    const task: TaskRecord = {
-      taskId,
-      sourceWindowId,
-      emit,
-      controller: new AbortController(),
-      client: new ModelClient(),
-      state: "proposed",
-      cancelled: false,
-    }
-    this.tasks.set(taskId, task)
-    this.emitState(task, "proposed")
-    void this.runRerun(task, record)
-    return { taskId }
   }
 
   cancel(taskId: string, sourceWindowId: string): boolean {
@@ -576,7 +555,6 @@ export class TaskManager {
         const sessionId = spawned.snapshot.sessionId
         task.activeTerminalSessionId = sessionId
         try {
-          const startedAt = Date.now()
           const run = await spawned.operation.done
           const policyFailure = run.cancelled
             ? terminalFailure(
@@ -605,27 +583,6 @@ export class TaskManager {
             : run.exitCode === 0 && !run.timedOut && !run.hardLimitExceeded
               ? "completed"
               : "failed"
-          const intent = plan.terminalPlan.intent as { kind: string; action?: string }
-          this.dependencies.terminalRunStore?.recordTerminalRun({
-            runId: randomUUID(),
-            operationId: plan.operationId,
-            taskId: task.taskId,
-            intentKind: intent.kind,
-            ...(intent.action === undefined ? {} : { intentAction: intent.action }),
-            argv: plan.terminalPlan.argv,
-            cwdRelative: plan.terminalPlan.cwd.relativePath,
-            planDigest: plan.terminalPlan.planDigest,
-            fingerprint: readableFingerprint(plan.terminalPlan.planDigest).join(" "),
-            status,
-            exitCode: run.exitCode,
-            ...(policyFailure ? { policyCode: policyFailure.code } : {}),
-            durationMs: run.durationMs,
-            outputBytes: run.outputBytes,
-            outputRedacted: run.content,
-            truncated: run.truncated,
-            startedAt,
-            finishedAt: Date.now(),
-          })
           return {
             operationId: plan.operationId,
             status,
@@ -653,22 +610,6 @@ export class TaskManager {
         : result.content,
       detail: result.detail,
       ...(result.policyFailure ? { policyFailure: result.policyFailure } : {}),
-    }
-  }
-
-  private async runRerun(task: TaskRecord, record: TerminalRunLedgerRecord): Promise<void> {
-    this.emitState(task, "planning")
-    try {
-      const result = await this.executeTerminalOperation(task, terminalIntentFromLedger(record), {
-        forceApproval: true,
-      })
-      if (!isTerminal(task.state))
-        this.emitState(task, result.policyFailure ? "failed" : "completed")
-      task.emit({ type: "done" })
-    } catch (error) {
-      if (task.cancelled) return
-      this.emitState(task, "failed")
-      task.emit({ type: "error", message: safeError(error) })
     }
   }
 
@@ -1030,46 +971,6 @@ function formatTerminalRiskBadge(plan: ResolvedCommandPlan): string {
     return `${plan.risk} · workspace 可写、执行项目代码`
   }
   return `${plan.risk} · ${plan.sandbox.tier}`
-}
-
-function terminalIntentFromLedger(record: {
-  intentKind: string
-  intentAction?: string
-  argv: string[]
-  cwdRelative: string
-}): unknown {
-  const { intentKind, intentAction, argv, cwdRelative } = record
-  if (intentKind === "git.read" && ["status", "diff", "log"].includes(intentAction ?? "")) {
-    return { kind: intentKind, action: intentAction, args: argv.slice(2), cwd: cwdRelative }
-  }
-  if (
-    intentKind === "git.inspect" &&
-    ["show", "blame", "stash list"].includes(intentAction ?? "")
-  ) {
-    const prefixLength = intentAction === "stash list" ? 3 : 2
-    return {
-      kind: intentKind,
-      action: intentAction,
-      args: argv.slice(prefixLength),
-      cwd: cwdRelative,
-    }
-  }
-  if (intentKind === "runtime.info" && ["node", "npm"].includes(intentAction ?? "")) {
-    return { kind: intentKind, action: intentAction, cwd: cwdRelative }
-  }
-  if (intentKind === "pkg.audit" && ["ls", "outdated"].includes(intentAction ?? "")) {
-    return { kind: intentKind, action: intentAction, packageManager: "auto", cwd: cwdRelative }
-  }
-  if (intentKind === "project.script" && argv[0] === "run" && typeof argv[1] === "string") {
-    return {
-      kind: intentKind,
-      packageManager: "auto",
-      script: argv[1],
-      forwardedArgs: [],
-      cwd: cwdRelative,
-    }
-  }
-  throw new Error("运行记录中的 Terminal intent 不可安全重建")
 }
 
 const FINGERPRINT_WORDS = [

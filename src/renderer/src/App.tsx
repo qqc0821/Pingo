@@ -21,7 +21,6 @@ import type {
   TaskState,
 } from "../../shared/types.js"
 import {
-  collapseStack,
   createPromptId,
   movePromptIndex,
   pushNotification,
@@ -652,14 +651,10 @@ export function App(): ReactElement {
     const removeAppearance = api.pet.onAppearance((appearance) =>
       setAppearanceScale(appearance.scale),
     )
-    const removePetState = api.pet.onStateChange((event) =>
-      showPetState(event.state, event.durationMs),
-    )
     return () => {
       removeAppearance()
-      removePetState()
     }
-  }, [showPetState])
+  }, [])
 
   useEffect(() => {
     void window.pingo?.pet.setExpanded(expanded)
@@ -1081,8 +1076,7 @@ export function App(): ReactElement {
     window.pingo?.pet.showContextMenu()
   }, [])
 
-  const { visible, hidden } = collapseStack(prompts)
-  const stackCards = [...hidden, ...visible]
+  const stackCards = prompts
   const hasMultiplePromptCards = stackCards.length > 1
   const requestedPromptIndex = activePromptId
     ? stackCards.findIndex((item) => item.id === activePromptId)
@@ -1091,8 +1085,7 @@ export function App(): ReactElement {
   const activePrompt = activePromptIndex >= 0 ? stackCards[activePromptIndex] : null
 
   useEffect(() => {
-    const { visible: currentVisible, hidden: currentHidden } = collapseStack(prompts)
-    const currentCards = [...currentHidden, ...currentVisible]
+    const currentCards = prompts
     if (activePromptId && !currentCards.some((item) => item.id === activePromptId)) {
       setActivePromptId(null)
     }

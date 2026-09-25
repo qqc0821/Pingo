@@ -16,10 +16,6 @@ export class TerminalTrustManager {
 
   constructor(private readonly sessionId = randomUUID()) {}
 
-  getSessionId(): string {
-    return this.sessionId
-  }
-
   grant(plan: ResolvedCommandPlan, sourceWindowId: string, now = Date.now()): TerminalTrustGrant {
     assertTrustable(plan)
     const key = getTrustKey(plan)

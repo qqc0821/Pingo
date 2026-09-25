@@ -86,13 +86,6 @@ function normalizeNotification(
   const source =
     typeof body.source === "string" ? body.source.slice(0, MAX_ID_SOURCE_LENGTH) : undefined
   const kind = isKind(body.kind) ? body.kind : undefined
-  const expiresInMs =
-    typeof body.expiresInMs === "number" &&
-    Number.isFinite(body.expiresInMs) &&
-    body.expiresInMs > 0
-      ? Math.min(Math.round(body.expiresInMs), 24 * 60 * 60 * 1000)
-      : undefined
-
   // 便捷路径:/mood /animate 只需一个字段。
   if (pathname === "/mood" && mood) return { text, mood }
   if (pathname === "/animate" && action) return { text, action }
@@ -105,7 +98,6 @@ function normalizeNotification(
     ...(id ? { id } : {}),
     ...(source ? { source } : {}),
     ...(kind ? { kind } : {}),
-    ...(expiresInMs !== undefined ? { expiresInMs } : {}),
   }
 }
 

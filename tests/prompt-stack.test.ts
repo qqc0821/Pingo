@@ -1,8 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
-  MAX_VISIBLE_PROMPTS,
-  collapseStack,
   createPromptId,
   dedupeKeyFor,
   movePromptIndex,
@@ -139,62 +137,6 @@ test("removePromptItem 只移除目标卡", () => {
     ["a", "c"],
   )
   assert.equal(next.length, 2)
-})
-
-test("collapseStack 保留最近 maxVisible 张卡,其余折叠", () => {
-  const stack = [
-    taskCard("a", "分析中", "A"),
-    taskCard("b", "分析中", "B"),
-    taskCard("c", "分析中", "C"),
-    taskCard("d", "分析中", "D"),
-    taskCard("e", "分析中", "E"),
-  ]
-
-  const { visible, hidden } = collapseStack(stack, { now: 1000, ttlMs: 60_000 })
-
-  assert.equal(visible.length, MAX_VISIBLE_PROMPTS)
-  assert.deepEqual(
-    visible.map((item) => item.taskId),
-    ["c", "d", "e"].slice(-MAX_VISIBLE_PROMPTS),
-    "应保留最近 maxVisible 张(数组末尾最新)",
-  )
-  assert.deepEqual(
-    hidden.map((item) => item.taskId),
-    ["a", "b", "c"].slice(0, 5 - MAX_VISIBLE_PROMPTS),
-  )
-})
-
-test("collapseStack:非 sticky 卡超过 TTL 折叠进 hidden,sticky 卡豁免", () => {
-  const staleNotification: PetPromptItem = {
-    ...taskCard("n", "通知", "旧通知"),
-    kind: "notification",
-    sticky: false,
-    updatedAt: 0,
-    dedupKey: "src:x",
-  }
-  const freshTask = taskCard("t", "分析中", "进行中")
-
-  const { visible, hidden } = collapseStack([staleNotification, freshTask], {
-    now: 100_000,
-    ttlMs: 60_000,
-  })
-
-  assert.deepEqual(
-    visible.map((item) => item.taskId),
-    ["t"],
-  )
-  assert.deepEqual(
-    hidden.map((item) => item.kind),
-    ["notification"],
-  )
-})
-
-test("collapseStack:折叠只影响展示,不删除卡", () => {
-  const stack = Array.from({ length: 6 }, (_, index) =>
-    taskCard(`t${index}`, "分析中", `内容${index}`),
-  )
-  const { visible, hidden } = collapseStack(stack, { now: 1000, ttlMs: 60_000 })
-  assert.equal(visible.length + hidden.length, 6)
 })
 
 test("movePromptIndex:轮播在首尾禁用方向且不越界", () => {

@@ -18,7 +18,6 @@
     "harness": "tsx --test tests/agent-harness.test.ts",
     "test:directory": "tsx --test tests/inspect-directory.test.ts",
     "test:ai-terminal": "tsx scripts/ai-terminal-directory.ts",
-    "agent": "tsx scripts/mini-agent.ts",
     "pack:mac": "npm run build && electron-builder --mac --arm64"
   },
   "dependencies": {

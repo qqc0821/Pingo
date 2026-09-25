@@ -10,11 +10,6 @@ export type PetState =
   | "focus"
   | "celebrate"
 
-export interface PetStateEvent {
-  state: PetState
-  durationMs?: number
-}
-
 /** 外部(DSH / MCP)推送的一条宠物通知。 */
 export interface PetNotification {
   text: string
@@ -26,8 +21,6 @@ export interface PetNotification {
   source?: string
   /** 通知分类(可选),用于渲染分类标签与 tone。 */
   kind?: PetNotificationKind
-  /** 可选:该通知在渲染层达到此时长后自动折入"更多"分组(仅折叠,不删除)。 */
-  expiresInMs?: number
 }
 
 export type PetNotificationKind = "turn" | "subagent" | "goal" | "mcp" | "system"
@@ -35,7 +28,7 @@ export type PetNotificationKind = "turn" | "subagent" | "goal" | "mcp" | "system
 /** 提示卡的语气,决定图标、配色与 live region 模式。 */
 export type PromptTone = "neutral" | "progress" | "success" | "warning" | "error"
 
-/** 提示卡大类,决定堆叠与关闭语义。 */
+/** 提示卡大类,决定轮播与关闭语义。 */
 export type PetPromptKind = "task" | "notification" | "mcp" | "approval" | "result" | "system"
 
 /** 渲染层提示卡。任务进度与外部通知都归一为这种卡片。 */
@@ -282,27 +275,6 @@ export interface TerminalPolicyFailure {
   requiredAction?: "ask_user" | "change_approach" | "stop"
 }
 
-export interface TerminalRunRecord {
-  runId: string
-  operationId: string
-  taskId: string
-  intentKind: string
-  intentAction?: string
-  argv: string[]
-  cwdRelative: string
-  planDigest: string
-  fingerprint: string
-  status: OperationResult["status"]
-  exitCode?: number | null
-  policyCode?: TerminalPolicyCode
-  durationMs: number
-  outputBytes: number
-  outputRedacted: string
-  truncated: boolean
-  startedAt: number
-  finishedAt: number
-}
-
 export interface CapabilityGrant {
   grantId: string
   capabilities: Capability[]
@@ -329,15 +301,6 @@ export interface FileStatePrecondition {
   size?: number
 }
 
-export interface CommandPlan {
-  executable: string
-  args: string[]
-  cwd: string
-  timeoutMs: number
-  outputLimitBytes: number
-  envKeys: string[]
-}
-
 export interface OperationPlan {
   operationId: string
   taskId: string
@@ -348,7 +311,6 @@ export interface OperationPlan {
   riskReason: string
   targets: string[]
   preview: string
-  command?: CommandPlan
   terminalPlan?: ResolvedCommandPlan
   preconditions: FileStatePrecondition[]
   digest: string
@@ -470,15 +432,6 @@ export interface WindowPosition {
   y: number
 }
 
-export interface WindowState {
-  expanded: boolean
-  position: WindowPosition
-  size: {
-    width: number
-    height: number
-  }
-}
-
 export interface ProjectInfo {
   path: string
   name: string
@@ -511,10 +464,7 @@ export interface PingoAPI {
     dragStart: (screenX: number, screenY: number) => void
     dragMove: (screenX: number, screenY: number) => void
     dragEnd: () => void
-    onWindowState: (listener: (state: WindowState) => void) => () => void
-    onSettingsRequest: (listener: () => void) => () => void
     onAppearance: (listener: (appearance: WindowAppearance) => void) => () => void
-    onStateChange: (listener: (event: PetStateEvent) => void) => () => void
     onNotification: (listener: (notification: PetNotification) => void) => () => void
   }
   project: {
@@ -552,14 +502,5 @@ export interface PingoAPI {
   terminalTrust: {
     list: () => Promise<TerminalTrustGrant[]>
     revokeAll: () => Promise<void>
-  }
-  terminalRuns: {
-    list: (query?: string, limit?: number) => Promise<TerminalRunRecord[]>
-    rerun: (runId: string) => Promise<{ taskId: string }>
-    diff: (
-      leftRunId: string,
-      rightRunId: string,
-    ) => Promise<{ left: string; right: string; different: boolean } | null>
-    delete: (runId: string) => Promise<boolean>
   }
 }

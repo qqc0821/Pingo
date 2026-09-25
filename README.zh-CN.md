@@ -33,18 +33,18 @@ Pingo 不是给聊天窗口套上一层宠物皮肤。桌宠是一个随时在�
 - **一直在桌面上** — 可拖拽的动画伙伴，拥有 idle、happy、thinking、gentle 多种状态，并支持托盘控制。
 - **理解你的工作区** — 在你授权的目录内列出、搜索和读取项目文件。
 - **真正调用工具** — 写入和补丁文件、移动到可恢复废纸篓、检查 Git，以及运行获准的项目质量脚本。
-- **让控制权始终在你手里** — 高风险操作会被分级、预览并逐次确认；不会静默执行。
-- **把任务做成闭环** — 查看任务进度与结果，回顾、重跑 Terminal 历史，并对比输出。
+- **限制操作范围** — 操作经过工作区边界、风险规则和 macOS Seatbelt 沙箱检查。
+- **把任务做成闭环** — 查看任务进度、命令输出和最终结果。
 - **使用你选择的模型** — 默认 DeepSeek，也可以配置任意兼容 Chat Completions 的接口和模型。
 
 ### 有用的自主性，不等于不受限的权限
 
-Pingo 把工作区限定的文件工具、意图白名单 Terminal、macOS Seatbelt 沙箱、脱敏审计日志和可恢复的破坏性操作组合在一起。Trusted Workspace 可以减少重复的文件确认，但 Terminal 命令仍然需要审批。
+Pingo 把工作区限定的文件工具、意图白名单 Terminal、macOS Seatbelt 沙箱、脱敏审计日志和可恢复的破坏性操作组合在一起。当前桌面入口在完成这些检查后会自动确认计划操作；受控运行路径和测试仍保留审批流程。
 
 ## 架构
 
 - Electron + React + TypeScript（electron-vite），SCSS 样式。
-- Renderer 保持 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`，只通过 preload 白名单接收任务状态、权限卡和操作预览。
+- Renderer 保持 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`，只通过 preload 白名单接收任务状态和操作结果。
 - 能力授权、风险分级、审批 token、路径复检和真实执行全部由 Main Process 控制。
 - 宠物窗口是透明无边框的置顶窗口；托盘菜单控制退出与显隐。
 
@@ -102,7 +102,7 @@ npm run test:directory
 
 ### AI Terminal 端到端测试
 
-把你的原始问题原样交给真实模型，由 AI 自己决定是否调用只读 `terminal_intent`；测试只自动处理 capability/命令确认，不会替你预设问题或命令。默认授权目录是当前工作目录：
+把你的原始问题原样交给真实模型，由 AI 自己决定是否调用只读 `terminal_intent`；测试运行器会自动处理 capability/命令确认，不会替你预设问题或命令。默认授权目录是当前工作目录：
 
 ```bash
 npm run test:ai-terminal -- --prompt "查看当前项目的 src 目录有哪些文件"
@@ -128,21 +128,10 @@ npm run harness
 
 Harness 是确定性回归测试，不替代真实模型的端到端评估；后者仍使用 `npm run test:ai-terminal`，应在隔离环境中按需运行。
 
-## Mini Agent（命令行闭环）
-
-`scripts/mini-agent.ts` 是不依赖应用其它模块的独立 agent，用来在没有界面的情况下验证「模型能否自主调用工具并基于真实文件回答」。它提供 `list_files`、`read_file`、`run_command` 三个工具，需要 `.env` 中的 `MODEL_API_KEY`：
-
-```bash
-npm run agent -- "package.json 里的 dev 命令是什么"
-npm run agent -- --debug "这个项目当前 git 分支是什么"
-```
-
-它**不做任何权限拦截**：命令直接执行、路径不限制在项目目录内、隐藏文件同样可见。只保留防止撑爆上下文的限制（单文件读取 20K 字符、目录最多列 200 项、命令 60 秒超时、最多 6 轮工具循环）。因为 `.env` 对它可见，模型读取它会把 `MODEL_API_KEY` 一起发给模型服务，介意的话把 `.env` 加进脚本里的 `NOISY_DIRECTORIES`。
-
 ## 安全边界
 
 - 结构化文件工具只接受授权目录内的相对路径；`..`、绝对路径、反斜杠、符号链接越权、`.env`、密钥文件、敏感目录、二进制和超大文件默认拒绝。
-- 标准模式下写入、补丁、移动、废纸篓和所有 Terminal 命令都必须逐次“允许一次”；Trusted Workspace 内的结构化文件操作不再重复确认，但仍使用原子替换、路径/文件状态复检、审计和可恢复废纸篓。
+- 当前桌面入口会在校验计划后自动确认写入和 Terminal 命令。受控 TaskManager 路径支持逐项审批；两种路径都保留原子替换、路径/文件状态复检、审计、工作区边界和可恢复废纸篓。
 - Terminal 仅接受结构化 `executable + args + cwd` 意图，强制 `shell: false`、最小环境、超时、输出上限和取消回收；Shell、解释器、sudo、安装、网络客户端和永久删除永远阻止。
 - 操作历史保存在应用数据目录的 `0600` 脱敏 JSONL 中，不保存 API Key、完整 Prompt、文件全文或未脱敏输出。
 - 普通授权不会跨应用重启保留；Trusted Workspace 只持久化目录选择本身，不持久化任何命令或文件授权。

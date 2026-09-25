@@ -3,8 +3,9 @@
 import { app, BrowserWindow } from "electron"
 import { join } from "node:path"
 import { writeFileSync, mkdirSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 
-const ROOT = "/Users/nicolas/Projects_app/Pingo"
+const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const RENDERER = join(ROOT, "out/renderer/index.html")
 const OUT = process.env.PINGO_CAPTURE_DIR || join(ROOT, "build/pet-shots")
 const EXPANDED_SIZE = { width: 392, height: 350 }

@@ -29,10 +29,6 @@ export class CapabilityManager {
     this.sessionId = sessionId
   }
 
-  getSessionId(): string {
-    return this.sessionId
-  }
-
   grant(request: GrantRequest, now = Date.now()): CapabilityGrant {
     validateGrantRequest(request)
     const scopeRoots = request.scopeRoots.map((root) => canonicalDirectory(root))
@@ -64,17 +60,6 @@ export class CapabilityManager {
     if (!grant || grant.revokedAt !== undefined) return false
     grant.revokedAt = now
     return true
-  }
-
-  revokeAllForWindow(sourceWindowId: string, now = Date.now()): number {
-    let count = 0
-    for (const grant of this.grants.values()) {
-      if (grant.sourceWindowId === sourceWindowId && grant.revokedAt === undefined) {
-        grant.revokedAt = now
-        count += 1
-      }
-    }
-    return count
   }
 
   revokeAll(now = Date.now()): void {

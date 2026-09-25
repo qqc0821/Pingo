@@ -1,0 +1,7 @@
+=== ROLLBACK BASELINE (2026年 9月10日 星期四 22时48分21秒 CST) ===
+cli: 0.1.0-rc.7
+dsh-base: 0.1.0-rc.8
+dsh-web-app: 0.1.0-rc.8
+dsh-app-boot: 0.1.0-rc.8
+dsh-cmdline: 0.1.0-rc.8
+rollback cmd: npm i -g @deepseek-ai/dsh@0.1.0-rc.7

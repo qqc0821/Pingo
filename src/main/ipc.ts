@@ -12,7 +12,6 @@ import type {
 } from "../shared/types.js"
 import type { SettingsStore } from "./store.js"
 import { AuditLogger } from "./security/auditLogger.js"
-import { TerminalRunStore } from "./terminal/runStore.js"
 import { SeatbeltTerminalBackend } from "./terminal/seatbeltBackend.js"
 import { TerminalSessionService } from "./terminal/sessionRegistry.js"
 import { getRealProjectRoot, isSensitiveRelativePath } from "./security/pathGuard.js"
@@ -29,14 +28,12 @@ import {
 
 export function registerIpcHandlers(settingsStore: SettingsStore): void {
   const auditLogger = new AuditLogger(join(app.getPath("userData"), "operation-history.jsonl"))
-  const terminalRunStore = new TerminalRunStore()
   const terminalSessionService = new TerminalSessionService()
   terminalSessionService.registerBackend(new SeatbeltTerminalBackend())
   const taskManager = new TaskManager({
     settingsStore,
     auditLogger,
     terminalSessionService,
-    terminalRunStore,
     skipUserConfirmation: true,
   })
 
@@ -48,7 +45,6 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
 
   app.once("will-quit", () => {
     void terminalSessionService.disposeAll()
-    terminalRunStore.close()
   })
 
   ipcMain.handle("pet:set-expanded", (event, value: unknown) => {
@@ -292,42 +288,6 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     taskManager.revokeAllTerminalTrust()
   })
 
-  ipcMain.handle("terminal-runs:list", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    const query = parseTerminalRunQuery(value)
-    return terminalRunStore.searchTerminalRuns(query.query, query.limit)
-  })
-
-  ipcMain.handle("terminal-runs:rerun", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    if (typeof value !== "string" || value.length > 120) throw new TypeError("运行记录 ID 无效")
-    const sender = event.sender
-    return taskManager.rerunTerminalRun(String(sender.id), value, (taskEvent) => {
-      if (!sender.isDestroyed()) sender.send("pingo:task-event", taskEvent)
-    })
-  })
-
-  ipcMain.handle("terminal-runs:diff", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    if (typeof value !== "object" || value === null) throw new TypeError("运行对比参数无效")
-    const candidate = value as { leftRunId?: unknown; rightRunId?: unknown }
-    if (
-      typeof candidate.leftRunId !== "string" ||
-      candidate.leftRunId.length > 120 ||
-      typeof candidate.rightRunId !== "string" ||
-      candidate.rightRunId.length > 120
-    ) {
-      throw new TypeError("运行对比参数无效")
-    }
-    return terminalRunStore.diffTerminalRuns(candidate.leftRunId, candidate.rightRunId)
-  })
-
-  ipcMain.handle("terminal-runs:delete", (event, value: unknown) => {
-    assertTrustedSender(event.sender)
-    if (typeof value !== "string" || value.length > 120) throw new TypeError("运行记录 ID 无效")
-    return terminalRunStore.deleteTerminalRun(value)
-  })
-
   ipcMain.handle("audit:list", (event) => {
     assertTrustedSender(event.sender)
     return taskManager.getAuditHistory()
@@ -392,26 +352,6 @@ function parseOpenPathRequest(value: unknown): { path: string; line?: number; co
     path: candidate.path.trim(),
     ...(candidate.line === undefined ? {} : { line: candidate.line as number }),
     ...(candidate.column === undefined ? {} : { column: candidate.column as number }),
-  }
-}
-
-function parseTerminalRunQuery(value: unknown): { query: string; limit: number } {
-  if (value === undefined || value === null) return { query: "", limit: 50 }
-  if (typeof value !== "object") throw new TypeError("运行查询参数无效")
-  const candidate = value as { query?: unknown; limit?: unknown }
-  if (
-    (candidate.query !== undefined &&
-      (typeof candidate.query !== "string" || candidate.query.length > 200)) ||
-    (candidate.limit !== undefined &&
-      (!Number.isSafeInteger(candidate.limit) ||
-        (candidate.limit as number) < 1 ||
-        (candidate.limit as number) > 100))
-  ) {
-    throw new TypeError("运行查询参数无效")
-  }
-  return {
-    query: typeof candidate.query === "string" ? candidate.query : "",
-    limit: typeof candidate.limit === "number" ? candidate.limit : 50,
   }
 }
 

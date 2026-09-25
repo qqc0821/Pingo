@@ -1,10 +1,9 @@
-import type { ChatMessageInput, ChatStreamEvent } from "../../shared/types.js"
+import type { ChatMessageInput } from "../../shared/types.js"
 import type { ToolDefinition } from "../tools/types.js"
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com/v1/chat/completions"
 const DEFAULT_MODEL = "deepseek-v4-pro"
 const NETWORK_REQUEST_TIMEOUT_MS = 60_000
-const MAX_HISTORY = 24
 
 interface ActiveRequest {
   controller: AbortController
@@ -40,42 +39,6 @@ export interface CompletionResult {
 export class ModelClient {
   private activeRequest: ActiveRequest | null = null
 
-  async stream(
-    messages: ChatMessageInput[],
-    emit: (event: ChatStreamEvent) => void,
-  ): Promise<void> {
-    this.cancel()
-
-    const apiKey = process.env.MODEL_API_KEY?.trim()
-    if (!apiKey) {
-      emit({
-        type: "error",
-        message:
-          "尚未配置模型密钥。开发环境请复制 .env.example 为 .env；打包版请在 ~/Library/Application Support/pingo/.env 中填写 MODEL_API_KEY。",
-      })
-      return
-    }
-
-    const request: ActiveRequest = {
-      controller: new AbortController(),
-      cancelled: false,
-      timedOut: false,
-    }
-    this.activeRequest = request
-    emit({ type: "start" })
-
-    try {
-      await this.streamText(messages, emit, apiKey, request)
-      if (!request.cancelled) emit({ type: "done" })
-    } catch (error) {
-      if (request.cancelled) emit({ type: "cancelled" })
-      else if (request.timedOut) emit({ type: "error", message: "模型请求超时，请稍后重试。" })
-      else emit({ type: "error", message: toSafeErrorMessage(error) })
-    } finally {
-      if (this.activeRequest === request) this.activeRequest = null
-    }
-  }
-
   cancel(): void {
     if (!this.activeRequest) return
     this.activeRequest.cancelled = true
@@ -102,7 +65,7 @@ export class ModelClient {
     }
     this.activeRequest = request
     try {
-      const response = await this.fetchCompletion(messages, apiKey, false, request, toolDefinitions)
+      const response = await this.fetchCompletion(messages, apiKey, request, toolDefinitions)
       return parseCompletion(await response.json())
     } catch (error) {
       if (request.timedOut) throw new Error("模型请求超时，请稍后重试。")
@@ -112,29 +75,17 @@ export class ModelClient {
     }
   }
 
-  private async streamText(
-    messages: ChatMessageInput[],
-    emit: (event: ChatStreamEvent) => void,
-    apiKey: string,
-    request: ActiveRequest,
-  ): Promise<void> {
-    const response = await this.fetchCompletion(messages.slice(-MAX_HISTORY), apiKey, true, request)
-    if (!response.body) throw new Error("模型服务没有返回可读取的流")
-    await readServerSentEvents(response.body, emit, request.controller.signal)
-  }
-
   private async fetchCompletion(
     messages: ModelRequestMessage[],
     apiKey: string,
-    stream: boolean,
     request: ActiveRequest,
     toolDefinitions: ToolDefinition[] = [],
   ): Promise<Response> {
     const body: Record<string, unknown> = {
       model: process.env.MODEL_NAME?.trim() || DEFAULT_MODEL,
       messages,
-      stream,
-      temperature: stream ? 1.4 : 0.2,
+      stream: false,
+      temperature: 0.2,
     }
     if (toolDefinitions.length > 0) {
       body.tools = toolDefinitions
@@ -167,34 +118,6 @@ export class ModelClient {
     } finally {
       clearTimeout(timeout)
       request.controller.signal.removeEventListener("abort", abortNetwork)
-    }
-  }
-}
-
-async function readServerSentEvents(
-  body: ReadableStream<Uint8Array>,
-  emit: (event: ChatStreamEvent) => void,
-  signal: AbortSignal,
-): Promise<void> {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (signal.aborted) return
-
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split(/\r?\n/)
-    buffer = lines.pop() ?? ""
-    for (const line of lines) {
-      if (!line.startsWith("data:")) continue
-      const data = line.slice(5).trim()
-      if (data === "[DONE]") return
-
-      const content = getDeltaContent(data)
-      if (content) emit({ type: "chunk", content })
     }
   }
 }
@@ -246,26 +169,4 @@ export function parseToolArguments(value: string | Record<string, unknown>): unk
   } catch {
     return null
   }
-}
-
-function getDeltaContent(raw: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (typeof parsed !== "object" || parsed === null) return null
-    const choices = (parsed as { choices?: unknown }).choices
-    if (!Array.isArray(choices) || choices.length === 0) return null
-    const firstChoice = choices[0]
-    if (typeof firstChoice !== "object" || firstChoice === null) return null
-    const delta = (firstChoice as { delta?: unknown }).delta
-    if (typeof delta !== "object" || delta === null) return null
-    const content = (delta as { content?: unknown }).content
-    return typeof content === "string" ? content : null
-  } catch {
-    return null
-  }
-}
-
-function toSafeErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message.slice(0, 240)
-  return "模型请求失败，请检查网络和模型配置。"
 }

@@ -2,10 +2,8 @@ import { contextBridge, ipcRenderer } from "electron"
 import type {
   ChatStreamEvent,
   PetNotification,
-  PetStateEvent,
   PingoAPI,
   WindowAppearance,
-  WindowState,
 } from "../shared/types.js"
 
 const api: PingoAPI = {
@@ -18,10 +16,7 @@ const api: PingoAPI = {
     dragStart: (screenX, screenY) => ipcRenderer.send("pet:drag-start", screenX, screenY),
     dragMove: (screenX, screenY) => ipcRenderer.send("pet:drag-move", screenX, screenY),
     dragEnd: () => ipcRenderer.send("pet:drag-end"),
-    onWindowState: (listener) => subscribe("pingo:window-state", listener),
-    onSettingsRequest: (listener) => subscribe("pingo:settings-request", listener),
     onAppearance: (listener) => subscribe("pingo:appearance", listener),
-    onStateChange: (listener) => subscribe("pingo:pet-state", listener),
     onNotification: (listener) => subscribe("pingo:pet-notify", listener),
   },
   project: {
@@ -61,23 +56,10 @@ const api: PingoAPI = {
     list: () => ipcRenderer.invoke("terminal-trust:list"),
     revokeAll: () => ipcRenderer.invoke("terminal-trust:revoke-all"),
   },
-  terminalRuns: {
-    list: (query, limit) => ipcRenderer.invoke("terminal-runs:list", { query, limit }),
-    rerun: (runId) => ipcRenderer.invoke("terminal-runs:rerun", runId),
-    diff: (leftRunId, rightRunId) =>
-      ipcRenderer.invoke("terminal-runs:diff", { leftRunId, rightRunId }),
-    delete: (runId) => ipcRenderer.invoke("terminal-runs:delete", runId),
-  },
 }
 
 contextBridge.exposeInMainWorld("pingo", api)
 
-function subscribe(
-  channel: "pingo:window-state",
-  listener: (state: WindowState) => void,
-): () => void
-function subscribe(channel: "pingo:settings-request", listener: () => void): () => void
-function subscribe(channel: "pingo:pet-state", listener: (event: PetStateEvent) => void): () => void
 function subscribe(
   channel: "pingo:pet-notify",
   listener: (notification: PetNotification) => void,

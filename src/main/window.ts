@@ -1,11 +1,6 @@
 import { BrowserWindow, screen } from "electron"
 import { join } from "node:path"
-import type {
-  PetNotification,
-  WindowAppearance,
-  WindowPosition,
-  WindowState,
-} from "../shared/types.js"
+import type { PetNotification, WindowAppearance, WindowPosition } from "../shared/types.js"
 import type { SettingsStore } from "./store.js"
 
 /** 宠物下方预留 38px，完整容纳消息按钮与焦点环。 */
@@ -88,7 +83,6 @@ export function createPetWindow(store: SettingsStore): BrowserWindow {
     const currentPreferences = store.getPreferences()
     setPetPreferences(currentPreferences.petScale, currentPreferences.transparency)
     petWindow?.show()
-    sendWindowState()
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -133,7 +127,6 @@ export function setPetExpanded(nextExpanded: boolean): void {
   detailExpanded = false
   window.setBounds({ ...nextPosition, ...size }, false)
   persistAnchorPosition()
-  sendWindowState()
 }
 
 export function setPetDetailExpanded(nextExpanded: boolean): void {
@@ -147,7 +140,6 @@ export function setPetDetailExpanded(nextExpanded: boolean): void {
   detailExpanded = nextExpanded
   window.setBounds({ ...getExpandedPosition(anchor, size), ...size }, false)
   persistAnchorPosition()
-  sendWindowState()
 }
 
 export function beginDrag(screenX: number, screenY: number): void {
@@ -174,7 +166,6 @@ export function endDrag(): void {
   dragSession = null
   snapToEdge()
   persistAnchorPosition()
-  sendWindowState()
 }
 
 export function showPetWindow(): void {
@@ -192,10 +183,6 @@ export function showPetWindowInactive(): void {
 
 export function hidePetWindow(): void {
   petWindow?.hide()
-}
-
-export function sendSettingsRequest(): void {
-  petWindow?.webContents.send("pingo:settings-request")
 }
 
 export function sendPetNotification(notification: PetNotification): void {
@@ -229,7 +216,6 @@ function resizePetWindowForScale(): void {
   )
   window.setBounds({ ...nextPosition, ...size }, false)
   persistAnchorPosition()
-  sendWindowState()
 }
 
 function getPetWindowSize(
@@ -319,18 +305,6 @@ function persistAnchorPosition(): void {
   if (!petWindow || !settingsStore) return
 
   settingsStore.setWindowPosition(getAnchorPosition(petWindow.getBounds()))
-}
-
-function sendWindowState(): void {
-  if (!petWindow) return
-
-  const bounds = petWindow.getBounds()
-  const state: WindowState = {
-    expanded,
-    position: { x: bounds.x, y: bounds.y },
-    size: { width: bounds.width, height: bounds.height },
-  }
-  petWindow.webContents.send("pingo:window-state", state)
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

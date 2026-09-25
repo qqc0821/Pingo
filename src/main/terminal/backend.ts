@@ -43,12 +43,6 @@ export interface TerminalRunResult {
   durationMs: number
 }
 
-/** Options controlling one command execution. */
-export interface TerminalRunOptions {
-  signal?: AbortSignal
-  onProgress?: (event: OperationProgressEvent) => void
-}
-
 /** Request to create one owner-scoped command session. */
 export interface TerminalSpawnRequest {
   /** Registered backend type. */
