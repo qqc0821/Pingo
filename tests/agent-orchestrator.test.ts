@@ -155,6 +155,47 @@ test("同轮写后读按原顺序观察写入后的内容", async () => {
   assert.deepEqual(calls, ["write_file", "read_file"])
 })
 
+test("工具异常回填失败观察，并跳过同批后续操作", async () => {
+  const executed: string[] = []
+  const failures: string[] = []
+  let modelCalls = 0
+  const client = {
+    async completeWithTools(messages: Array<Record<string, unknown>>) {
+      modelCalls += 1
+      if (modelCalls === 1)
+        return {
+          content: "",
+          toolCalls: [
+            { id: "first", name: "write_file", arguments: "{}" },
+            { id: "second", name: "read_file", arguments: "{}" },
+          ],
+        }
+      const observations = messages.filter((message) => message.role === "tool")
+      assert.equal(observations.length, 2)
+      assert.match(String(observations[0]?.content), /执行失败/)
+      assert.match(String(observations[1]?.content), /未执行/)
+      return { content: "操作未完成。", toolCalls: [] }
+    },
+  }
+  const orchestrator = new AgentOrchestrator({
+    taskId: "tool-throws",
+    client: client as never,
+    toolDefinitions: [],
+    executeTool: async (name) => {
+      executed.push(name)
+      throw new Error("internal details")
+    },
+    onUnhandledToolError: (_name, message) => failures.push(message),
+    isReadOnlyTool: (name) => name === "read_file",
+    emit: () => {},
+    isCancelled: () => false,
+  })
+  await orchestrator.run([{ role: "user", content: "修改后读取" }])
+  assert.deepEqual(executed, ["write_file"])
+  assert.equal(failures.length, 1)
+  assert.doesNotMatch(failures[0] ?? "", /internal details/)
+})
+
 test("变更类工具按原始调用顺序串行执行", async () => {
   const order: string[] = []
   let callCount = 0

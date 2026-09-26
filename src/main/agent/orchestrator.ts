@@ -23,6 +23,7 @@ export interface AgentOrchestratorDeps {
   client: Pick<ModelClient, "completeWithTools">
   toolDefinitions: ToolDefinition[]
   executeTool: (name: string, args: unknown) => Promise<ToolExecution>
+  onUnhandledToolError?: (name: string, message: string) => void
   isReadOnlyTool: (name: string) => boolean
   emit: (event: ChatStreamEvent) => void
   isCancelled: () => boolean
@@ -189,7 +190,7 @@ export class AgentOrchestrator {
     })
 
     // Calls in one model response may depend on earlier calls (for example write then read).
-    for (const call of toolCalls) {
+    for (const [index, call] of toolCalls.entries()) {
       if (this.deps.isCancelled()) {
         this.emitStep({
           stepId,
@@ -200,8 +201,28 @@ export class AgentOrchestrator {
         })
         return
       }
-      const execution = await this.deps.executeTool(call.name, parseToolArguments(call.arguments))
+      let execution: ToolExecution
+      try {
+        execution = await this.deps.executeTool(call.name, parseToolArguments(call.arguments))
+      } catch {
+        execution = {
+          content: `工具 ${call.name} 执行失败，后续操作已跳过。请检查当前状态后调整方法。`,
+          detail: `工具 ${call.name} 执行失败`,
+          status: "failed",
+        }
+        this.deps.onUnhandledToolError?.(call.name, execution.content)
+      }
       executions.set(call.id, execution)
+      if (execution.status && execution.status !== "completed") {
+        for (const remaining of toolCalls.slice(index + 1)) {
+          executions.set(remaining.id, {
+            content: "前一项工具未成功，未执行此操作。",
+            detail: `已跳过 ${remaining.name}`,
+            status: "cancelled",
+          })
+        }
+        break
+      }
     }
 
     let emittedBudgetExceeded = false

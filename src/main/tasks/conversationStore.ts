@@ -32,25 +32,37 @@ export class ConversationStore {
     return [...conversation.turns.flat(), { role: "user", content: input }]
   }
 
-  complete(windowId: string, sessionId: string, transcript: ModelRequestMessage[]): void {
+  complete(
+    windowId: string,
+    sessionId: string,
+    transcript: ModelRequestMessage[],
+    failureReason?: string,
+  ): void {
     const conversation = this.byWindow.get(windowId)
     if (!conversation || conversation.id !== sessionId || transcript.length < 2) return
     const final = transcript.at(-1)
-    if (final?.role !== "assistant" || !final.content?.trim()) return
+    if (final?.role !== "assistant" || (!final.content?.trim() && !failureReason)) return
     const bounded = transcript.map((message) =>
       message.role === "tool"
         ? { ...message, content: message.content.slice(0, MAX_TOOL_OBSERVATION_CHARS) }
         : message,
     )
+    if (failureReason) {
+      bounded[bounded.length - 1] = {
+        role: "assistant",
+        content: `上轮任务未完成：${failureReason.slice(0, 500)}\n${final.content ?? ""}`,
+      }
+    }
     conversation.turns.push(bounded)
     while (conversation.turns.length > 1 && exceedsBudget(conversation.turns)) {
       conversation.turns.shift()
     }
     if (exceedsBudget(conversation.turns)) {
       const first = bounded[0]
+      const last = bounded.at(-1)
       conversation.turns =
         first?.role === "user"
-          ? [[first, { role: "assistant", content: final.content.slice(0, 8_000) }]]
+          ? [[first, { role: "assistant", content: last?.content?.slice(0, 8_000) ?? "" }]]
           : []
     }
   }

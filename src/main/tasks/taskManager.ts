@@ -55,6 +55,8 @@ interface TaskRecord {
   sourceWindowId: string
   projectPath?: string
   sessionId?: string
+  input?: string
+  conversationRecorded?: boolean
   emit: TaskEventSink
   controller: AbortController
   client: ModelClient
@@ -62,6 +64,8 @@ interface TaskRecord {
   cancelled: boolean
   answer: string
   unresolvedOperationFailure?: string
+  unresolvedToolKind?: "read" | "change"
+  failureMessage?: string
   permission?: PermissionWaiter
   activeTerminalSessionId?: string
   cancellationPromise?: Promise<void>
@@ -107,7 +111,7 @@ export class TaskManager {
     sourceWindowId: string,
     messages: ModelRequestMessage[],
     emit: TaskEventSink,
-    options?: { taskId?: string; projectPath?: string; sessionId?: string },
+    options?: { taskId?: string; projectPath?: string; sessionId?: string; input?: string },
   ): string {
     const taskId = options?.taskId ?? randomUUID()
     const task: TaskRecord = {
@@ -115,6 +119,7 @@ export class TaskManager {
       sourceWindowId,
       projectPath: options?.projectPath ?? this.getActiveProjectPath(),
       sessionId: options?.sessionId,
+      input: options?.input,
       emit,
       controller: new AbortController(),
       client: new ModelClient(),
@@ -144,7 +149,12 @@ export class TaskManager {
     const projectPath = this.getActiveProjectPath()
     const session = this.conversations.current(sourceWindowId, projectPath)
     const messages = this.conversations.messagesFor(sourceWindowId, projectPath, content)
-    this.submit(sourceWindowId, messages, emit, { taskId, projectPath, sessionId: session.id })
+    this.submit(sourceWindowId, messages, emit, {
+      taskId,
+      projectPath,
+      sessionId: session.id,
+      input: content,
+    })
     return { taskId, sessionId: session.id }
   }
 
@@ -368,6 +378,10 @@ export class TaskManager {
         client: task.client,
         toolDefinitions: TOOL_DEFINITIONS,
         executeTool: (name, args) => this.executeTool(task, name, args),
+        onUnhandledToolError: (name, message) => {
+          task.unresolvedOperationFailure = message
+          task.unresolvedToolKind = READ_ONLY_TOOL_NAMES.has(name) ? "read" : "change"
+        },
         isReadOnlyTool: (name) => READ_ONLY_TOOL_NAMES.has(name),
         emit: (event) => this.handleModelEvent(task, event),
         isCancelled: () => task.cancelled,
@@ -376,18 +390,30 @@ export class TaskManager {
         projectPath,
       })
       const transcript = await orchestrator.run(messages)
-      if (!isTerminal(task.state) && !task.cancelled) {
-        if (transcript && task.sessionId && !task.unresolvedOperationFailure) {
-          this.conversations.complete(task.sourceWindowId, task.sessionId, transcript)
+      if (transcript && task.sessionId && !task.cancelled) {
+        const final = transcript.at(-1)
+        const emptyAnswer = final?.role !== "assistant" || !final.content?.trim()
+        const reason =
+          task.unresolvedOperationFailure ?? (emptyAnswer ? "模型未返回有效答复" : undefined)
+        this.conversations.complete(task.sourceWindowId, task.sessionId, transcript, reason)
+        task.conversationRecorded = true
+        if (emptyAnswer && !task.unresolvedOperationFailure) {
+          this.handleModelEvent(task, { type: "error", message: "模型未返回有效答复" })
         }
+      }
+      if (!isTerminal(task.state) && !task.cancelled) {
         this.handleModelEvent(task, { type: "done" })
       }
     } catch (error) {
       if (task.cancelled) return
+      this.rememberInterruptedRun(task, safeError(error))
       this.emitState(task, "failed")
       task.emit({ type: "error", message: safeError(error) })
     } finally {
       if (task.cancelled) await this.finishCancellation(task)
+      else if (task.state === "failed") {
+        this.rememberInterruptedRun(task, task.failureMessage ?? "任务未完成")
+      }
     }
   }
 
@@ -398,7 +424,10 @@ export class TaskManager {
       task.emit({ type: "error", message: task.answer.trim() || task.unresolvedOperationFailure })
       return
     }
-    if (event.type === "error") this.emitState(task, "failed")
+    if (event.type === "error") {
+      task.failureMessage = event.message
+      this.emitState(task, "failed")
+    }
     if (event.type === "cancelled") {
       if (!task.cancelled) this.emitState(task, "cancelled")
       return
@@ -418,6 +447,7 @@ export class TaskManager {
           )
         }
         if (!isTerminal(task.state)) {
+          this.rememberInterruptedRun(task, "任务已取消")
           this.emitState(task, "cancelled")
           task.emit({ type: "cancelled" })
         }
@@ -426,23 +456,37 @@ export class TaskManager {
     await task.cancellationPromise
   }
 
+  private rememberInterruptedRun(task: TaskRecord, reason: string): void {
+    if (!task.sessionId || !task.input || task.conversationRecorded) return
+    this.conversations.complete(
+      task.sourceWindowId,
+      task.sessionId,
+      [
+        { role: "user", content: task.input },
+        { role: "assistant", content: reason },
+      ],
+      reason,
+    )
+    task.conversationRecorded = true
+  }
+
   private async executeTool(task: TaskRecord, name: string, args: unknown): Promise<ToolExecution> {
     if (task.cancelled)
       return { content: "任务已取消。", detail: "任务已取消", status: "cancelled" }
     if (READ_ONLY_TOOL_NAMES.has(name)) {
       const grant = await this.waitForCapability(task, "workspace.read")
-      if (!grant) return this.trackToolExecution(task, deniedExecution("workspace.read"))
+      if (!grant) return this.trackToolExecution(task, name, deniedExecution("workspace.read"))
       const projectPath = this.requireProjectPath(task)
       if (grant.grant) this.capabilityManager.consume(grant.grant.grantId)
       const execution = await executeTool(projectPath, name, args)
-      return this.trackToolExecution(task, execution)
+      return this.trackToolExecution(task, name, execution)
     }
     if (isFileOperation(name))
-      return this.trackToolExecution(task, await this.executeFileOperation(task, name, args))
+      return this.trackToolExecution(task, name, await this.executeFileOperation(task, name, args))
     if (name === "terminal_intent")
-      return this.trackToolExecution(task, await this.executeTerminalOperation(task, args))
+      return this.trackToolExecution(task, name, await this.executeTerminalOperation(task, args))
     if (name === "terminal_execute") {
-      return this.trackToolExecution(task, {
+      return this.trackToolExecution(task, name, {
         content:
           "[policy_code=command_forbidden] 命令未执行：旧版通用 Terminal 接口已关闭。请改用 terminal_intent。",
         detail: "policy_code=command_forbidden",
@@ -455,17 +499,27 @@ export class TaskManager {
         ),
       })
     }
-    return this.trackToolExecution(task, {
+    return this.trackToolExecution(task, name, {
       content: `工具 ${name} 不被允许。`,
       detail: `已拒绝未知工具 ${name}`,
       status: "denied",
     })
   }
 
-  private trackToolExecution(task: TaskRecord, execution: ToolExecution): ToolExecution {
-    if (execution.status === "completed") task.unresolvedOperationFailure = undefined
-    else if (execution.status) {
-      task.unresolvedOperationFailure = execution.content || execution.detail
+  private trackToolExecution(
+    task: TaskRecord,
+    name: string,
+    execution: ToolExecution,
+  ): ToolExecution {
+    const kind = READ_ONLY_TOOL_NAMES.has(name) ? "read" : "change"
+    if (execution.status === "completed" && task.unresolvedToolKind === kind) {
+      task.unresolvedOperationFailure = undefined
+      task.unresolvedToolKind = undefined
+    } else if (execution.status) {
+      if (execution.status !== "completed") {
+        task.unresolvedOperationFailure = execution.content || execution.detail
+        task.unresolvedToolKind = kind
+      }
     }
     return execution
   }
@@ -962,8 +1016,10 @@ export class TaskManager {
   }
 
   private emitOperationResult(task: TaskRecord, result: OperationResult): void {
-    if (result.status === "completed") task.unresolvedOperationFailure = undefined
-    else task.unresolvedOperationFailure = result.content || result.detail
+    if (result.status !== "completed") {
+      task.unresolvedOperationFailure = result.content || result.detail
+      task.unresolvedToolKind = "change"
+    }
     task.emit({ type: "operation-result", result })
   }
 

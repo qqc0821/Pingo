@@ -1241,7 +1241,7 @@ export function App(): ReactElement {
                   disabled={isSending}
                   onClick={startNewConversation}
                 >
-                  新
+                  新对话
                 </button>
                 <textarea
                   ref={textareaRef}

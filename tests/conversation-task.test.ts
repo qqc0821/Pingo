@@ -90,8 +90,19 @@ test("a denied tool is not reported as a completed task", async () => {
   let count = 0
   try {
     process.env.MODEL_API_KEY = "test-key"
-    globalThis.fetch = async () => {
+    globalThis.fetch = async (_input, init) => {
       count += 1
+      if (count === 3) {
+        const body = JSON.parse(String(init?.body)) as {
+          messages: Array<{ role: string; content?: string }>
+        }
+        assert.ok(
+          body.messages.some(
+            (message) =>
+              message.role === "assistant" && message.content?.includes("上轮任务未完成"),
+          ),
+        )
+      }
       const message =
         count === 1
           ? {
@@ -114,6 +125,10 @@ test("a denied tool is not reported as a completed task", async () => {
       events.some((event) => event.type === "done"),
       false,
     )
+    const followUpEvents: ChatStreamEvent[] = []
+    manager.submitUserInput("window", "刚才为什么没做成", (event) => followUpEvents.push(event))
+    await waitForTerminal(followUpEvents)
+    assert.equal(count, 3)
   } finally {
     globalThis.fetch = previousFetch
     if (previousKey === undefined) delete process.env.MODEL_API_KEY
@@ -193,6 +208,57 @@ test("a follow-up retains the prior tool call and its observation", async () => 
     manager.submitUserInput("window", "刚才文件说了什么", (event) => secondEvents.push(event))
     await waitForTerminal(secondEvents)
     assert.equal(count, 3)
+  } finally {
+    globalThis.fetch = previousFetch
+    if (previousKey === undefined) delete process.env.MODEL_API_KEY
+    else process.env.MODEL_API_KEY = previousKey
+  }
+})
+
+test("a corrected read can recover a failed read before the final answer", async () => {
+  const previousFetch = globalThis.fetch
+  const previousKey = process.env.MODEL_API_KEY
+  const root = mkdtempSync(join(tmpdir(), "pingo-read-recovery-"))
+  writeFileSync(join(root, "note.txt"), "verified fact")
+  const store = new SettingsStore(join(root, "data"))
+  store.setAuthorizedProjectPath(root)
+  const manager = new TaskManager({
+    settingsStore: store,
+    auditLogger: new AuditLogger(join(root, "audit.jsonl")),
+    skipUserConfirmation: true,
+  })
+  const events: ChatStreamEvent[] = []
+  let count = 0
+  try {
+    process.env.MODEL_API_KEY = "test-key"
+    globalThis.fetch = async () => {
+      count += 1
+      const message =
+        count < 3
+          ? {
+              content: "",
+              tool_calls: [
+                {
+                  id: `read-${count}`,
+                  type: "function",
+                  function: {
+                    name: "read_file",
+                    arguments: JSON.stringify({ path: count === 1 ? "missing.txt" : "note.txt" }),
+                  },
+                },
+              ],
+            }
+          : { content: "文件确认了 verified fact。" }
+      return new Response(JSON.stringify({ choices: [{ message }] }), { status: 200 })
+    }
+    manager.submitUserInput("window", "读文件并回答", (event) => events.push(event))
+    await waitForTerminal(events)
+    assert.equal(count, 3)
+    assert.ok(events.some((event) => event.type === "done"))
+    assert.equal(
+      events.some((event) => event.type === "error"),
+      false,
+    )
   } finally {
     globalThis.fetch = previousFetch
     if (previousKey === undefined) delete process.env.MODEL_API_KEY
