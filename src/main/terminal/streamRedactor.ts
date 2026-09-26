@@ -30,6 +30,10 @@ export function redactOutput(value: string): string {
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
     .replace(/MODEL_API_KEY\s*=\s*[^\s]+/gi, "MODEL_API_KEY=[redacted]")
     .replace(/(api[_-]?key|token|secret|password)=([^\s&]+)/gi, "$1=[redacted]")
+    .replace(
+      /("(?:api[_-]?key|token|secret|password|authorization)"\s*:\s*")[^"]*(")/gi,
+      "$1[redacted]$2",
+    )
 }
 
 export function foldOutput(value: string, softLimit: number): string {

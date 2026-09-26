@@ -18,6 +18,8 @@ import { SeatbeltTerminalBackend } from "./terminal/seatbeltBackend.js"
 import { TerminalSessionService } from "./terminal/sessionRegistry.js"
 import { getRealProjectRoot, isSensitiveRelativePath } from "./security/pathGuard.js"
 import { TaskManager } from "./tasks/taskManager.js"
+import { DESKTOP_EXECUTION_POLICY } from "./tasks/executionPolicy.js"
+import { FileSessionPersistence } from "./tasks/sessionPersistence.js"
 import {
   beginDrag,
   endDrag,
@@ -37,7 +39,9 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     settingsStore,
     auditLogger,
     terminalSessionService,
-    skipUserConfirmation: true,
+    executionPolicy: DESKTOP_EXECUTION_POLICY,
+    conversationPersistence: new FileSessionPersistence(join(app.getPath("userData"), "sessions")),
+    conversationOwnerKey: "desktop-pet",
   })
 
   app.on("browser-window-created", (_event, window) => {
@@ -249,6 +253,12 @@ export function registerIpcHandlers(settingsStore: SettingsStore): void {
     )
       return null
     return latestRun
+  })
+
+  ipcMain.handle("task:get-recovery", (event): { interruptedInput: string } | null => {
+    assertTrustedSender(event.sender)
+    const interruptedInput = taskManager.getInterruptedConversation(String(event.sender.id))
+    return interruptedInput ? { interruptedInput } : null
   })
 
   ipcMain.handle("task:new-session", (event): { sessionId: string } => {

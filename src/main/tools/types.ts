@@ -14,4 +14,6 @@ export interface ToolExecution {
   detail: string
   status?: "completed" | "failed" | "denied" | "expired" | "cancelled"
   policyFailure?: TerminalPolicyFailure
+  errorCode?: string
+  truncated?: boolean
 }

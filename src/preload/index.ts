@@ -39,6 +39,7 @@ const api: PingoAPI = {
   task: {
     submit: (messages) => ipcRenderer.invoke("task:submit", messages),
     getSnapshot: () => ipcRenderer.invoke("task:get-snapshot"),
+    getRecovery: () => ipcRenderer.invoke("task:get-recovery"),
     newSession: () => ipcRenderer.invoke("task:new-session"),
     cancel: (taskId) => ipcRenderer.send("task:cancel", taskId),
     decide: (decision) => ipcRenderer.invoke("task:decide", decision),

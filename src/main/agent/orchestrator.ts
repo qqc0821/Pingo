@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { ChatStreamEvent } from "../../shared/types.js"
-import type { ModelClient, ModelRequestMessage, ToolCall } from "../ai/client.js"
+import type { ModelGateway, ModelRequestMessage, ToolCall } from "../ai/client.js"
 import { parseToolArguments } from "../ai/client.js"
 import {
   type ObservationBudget,
@@ -20,7 +20,7 @@ const TOO_MANY_TOOL_LOOPS_MESSAGE = "模型连续请求工具次数过多，已�
 
 export interface AgentOrchestratorDeps {
   taskId: string
-  client: Pick<ModelClient, "completeWithTools">
+  client: Pick<ModelGateway, "completeWithTools">
   toolDefinitions: ToolDefinition[]
   executeTool: (name: string, args: unknown) => Promise<ToolExecution>
   onUnhandledToolError?: (name: string, message: string) => void
@@ -35,6 +35,12 @@ export interface AgentOrchestratorDeps {
   projectPath?: string
 }
 
+export type RunStopReason = "answered" | "cancelled" | "budget_exhausted" | "failed"
+export type RunResult =
+  | { stopReason: "answered"; transcript: ModelRequestMessage[] }
+  | { stopReason: "cancelled" | "budget_exhausted"; transcript: null }
+  | { stopReason: "failed"; transcript: null; error: string }
+
 export class AgentOrchestrator {
   private readonly maxToolLoops: number
   private readonly observationBudget: ObservationBudget
@@ -44,7 +50,7 @@ export class AgentOrchestrator {
     this.observationBudget = deps.observationBudget ?? DEFAULT_OBSERVATION_BUDGET
   }
 
-  async run(messages: ModelRequestMessage[]): Promise<ModelRequestMessage[] | null> {
+  async run(messages: ModelRequestMessage[]): Promise<RunResult> {
     const conversation = buildToolConversation(messages, {
       projectAuthorized: this.deps.projectAuthorized,
       projectName: this.deps.projectName,
@@ -54,7 +60,7 @@ export class AgentOrchestrator {
     let nudgesUsed = 0
 
     for (let loopIndex = 0; loopIndex < this.maxToolLoops; loopIndex += 1) {
-      if (this.deps.isCancelled()) return null
+      if (this.deps.isCancelled()) return { stopReason: "cancelled", transcript: null }
 
       const modelStepId = randomUUID()
       this.emitStep({
@@ -65,7 +71,7 @@ export class AgentOrchestrator {
         title: "正在分析任务",
       })
 
-      let result: Awaited<ReturnType<ModelClient["completeWithTools"]>>
+      let result: Awaited<ReturnType<ModelGateway["completeWithTools"]>>
       try {
         result = await this.deps.client.completeWithTools(conversation, this.deps.toolDefinitions)
       } catch (error) {
@@ -76,9 +82,13 @@ export class AgentOrchestrator {
           status: "failed",
           title: "分析失败",
         })
-        throw error
+        return {
+          stopReason: "failed",
+          transcript: null,
+          error: error instanceof Error ? error.message : "模型请求失败",
+        }
       }
-      if (this.deps.isCancelled()) return null
+      if (this.deps.isCancelled()) return { stopReason: "cancelled", transcript: null }
 
       this.emitStep({
         stepId: modelStepId,
@@ -151,7 +161,7 @@ export class AgentOrchestrator {
             title: "已整理回答",
           })
           conversation.push({ role: "assistant", content: result.content || "" })
-          return conversation.slice(turnStart)
+          return { stopReason: "answered", transcript: conversation.slice(turnStart) }
         }
       }
 
@@ -162,13 +172,16 @@ export class AgentOrchestrator {
         tool_calls: toolCalls.map(toModelToolCall),
       })
       await this.runToolBatch(conversation, toolCalls, loopIndex)
-      if (this.deps.isCancelled()) return null
+      if (this.deps.isCancelled()) return { stopReason: "cancelled", transcript: null }
     }
 
     if (!this.deps.isCancelled()) {
       this.deps.emit({ type: "error", message: TOO_MANY_TOOL_LOOPS_MESSAGE })
     }
-    return null
+    return {
+      stopReason: this.deps.isCancelled() ? "cancelled" : "budget_exhausted",
+      transcript: null,
+    }
   }
 
   private async runToolBatch(
@@ -231,6 +244,21 @@ export class AgentOrchestrator {
       if (!execution) continue
       this.deps.emit({ type: "tool", name: call.name, detail: execution.detail })
       const formatted = tracker.format(execution.content)
+      this.deps.emit({
+        type: "tool-result",
+        callId: call.id,
+        name: call.name,
+        status: execution.status ?? "completed",
+        ...(execution.errorCode ||
+        execution.policyFailure ||
+        (execution.status && execution.status !== "completed")
+          ? {
+              errorCode:
+                execution.errorCode ?? execution.policyFailure?.code ?? `tool_${execution.status}`,
+            }
+          : {}),
+        truncated: Boolean(execution.truncated || formatted.truncated || formatted.omitted),
+      })
       if (formatted.omitted && !emittedBudgetExceeded) {
         emittedBudgetExceeded = true
         this.emitStep({

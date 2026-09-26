@@ -26,7 +26,7 @@ Ask Pingo, “What’s still unfinished in my project today?” It can inspect G
 
 Pingo is not a chat window wearing a pet costume. The pet is the always-available interface to an agent that can understand your project, take visible actions, and help close the loop.
 
-> **MVP status:** Pingo is a working early version for macOS. The storyboard above previews the product workflow using Pingo's current visual assets. Conversation context is remembered during the current app session and starts fresh after relaunch; cross-launch memory is not available yet.
+> **MVP status:** Pingo is a working early version for macOS. The storyboard above previews the product workflow using Pingo's current visual assets. Bounded conversation context is saved locally and can continue after relaunch; an interrupted task is marked as interrupted and is never replayed automatically.
 
 ## What Pingo can do
 
@@ -122,6 +122,7 @@ See [ai-terminal-directory.ts](scripts/ai-terminal-directory.ts) for the test ca
 - The current desktop entry automatically confirms planned writes and terminal commands after validation. The controlled TaskManager path supports per-action approval; both retain atomic replacement, path/file state re-validation, auditing, the workspace boundary, and recoverable trash.
 - Terminal accepts only structured `executable + args + cwd` intents, forcing `shell: false`, a minimal environment, timeouts, output caps, and cancellation; shell, interpreters, sudo, installs, network clients, and permanent deletes are always blocked.
 - Operation history is stored in a `0600` redacted JSONL file under the app data directory; API keys, full prompts, file contents, and unredacted output are never persisted.
+- Conversation context is stored separately in bounded, versioned `0600` session files. Starting a new conversation clears the active session; an interrupted run is not resumed automatically.
 - Capability grants never survive an app restart; a Trusted Workspace persists only the directory choice, not any command or file grant.
 
 ## License

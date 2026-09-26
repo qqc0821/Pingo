@@ -51,8 +51,9 @@ test("无 toolCalls 时直接结束并发出最终内容和步骤", async () => 
     maxToolLoops: 3,
   })
 
-  await orchestrator.run([{ role: "user", content: "hi" }])
+  const run = await orchestrator.run([{ role: "user", content: "hi" }])
 
+  assert.equal(run.stopReason, "answered")
   assert.ok(events.some((event) => event.type === "chunk" && event.content === "你好"))
   assert.ok(events.some((event) => event.type === "agent-step" && event.phase === "model"))
   assert.ok(events.some((event) => event.type === "agent-step" && event.phase === "summarizing"))
@@ -158,6 +159,7 @@ test("同轮写后读按原顺序观察写入后的内容", async () => {
 test("工具异常回填失败观察，并跳过同批后续操作", async () => {
   const executed: string[] = []
   const failures: string[] = []
+  const events: ChatStreamEvent[] = []
   let modelCalls = 0
   const client = {
     async completeWithTools(messages: Array<Record<string, unknown>>) {
@@ -187,13 +189,17 @@ test("工具异常回填失败观察，并跳过同批后续操作", async () =>
     },
     onUnhandledToolError: (_name, message) => failures.push(message),
     isReadOnlyTool: (name) => name === "read_file",
-    emit: () => {},
+    emit: (event) => events.push(event),
     isCancelled: () => false,
   })
   await orchestrator.run([{ role: "user", content: "修改后读取" }])
   assert.deepEqual(executed, ["write_file"])
   assert.equal(failures.length, 1)
   assert.doesNotMatch(failures[0] ?? "", /internal details/)
+  assert.deepEqual(
+    events.filter((event) => event.type === "tool-result").map((event) => event.status),
+    ["failed", "cancelled"],
+  )
 })
 
 test("变更类工具按原始调用顺序串行执行", async () => {
@@ -260,8 +266,9 @@ test("取消后不再调用下一轮模型", async () => {
     isCancelled: () => cancelled,
   })
 
-  await orchestrator.run([{ role: "user", content: "read" }])
+  const run = await orchestrator.run([{ role: "user", content: "read" }])
 
+  assert.equal(run.stopReason, "cancelled")
   assert.equal(callCount, 1)
 })
 
@@ -286,8 +293,9 @@ test("超出工具循环预算时发出友好错误", async () => {
     maxToolLoops: 2,
   })
 
-  await orchestrator.run([{ role: "user", content: "loop" }])
+  const run = await orchestrator.run([{ role: "user", content: "loop" }])
 
+  assert.equal(run.stopReason, "budget_exhausted")
   assert.ok(
     events.some(
       (event) =>
