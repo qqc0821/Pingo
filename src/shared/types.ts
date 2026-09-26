@@ -84,6 +84,14 @@ export type ChatStreamEvent =
   | { type: "start" }
   | { type: "chunk"; content: string }
   | { type: "tool"; name: string; detail: string }
+  | {
+      type: "tool-result"
+      callId: string
+      name: string
+      status: "completed" | "failed" | "denied" | "cancelled" | "expired"
+      errorCode?: string
+      truncated: boolean
+    }
   | AgentStepEvent
   | OperationProgressEvent
   | { type: "task-state"; taskId: string; state: TaskState }
@@ -407,6 +415,8 @@ export interface OperationResult {
   truncated?: boolean
   undoId?: string
   policyFailure?: TerminalPolicyFailure
+  /** Execution success alone does not prove the user's desired outcome. */
+  verification?: "verified" | "not_checked"
 }
 
 export type TaskState =
@@ -505,6 +515,7 @@ export interface PingoAPI {
   task: {
     submit: (request: TaskSubmission) => Promise<{ taskId: string; sessionId: string }>
     getSnapshot: () => Promise<TaskRunSnapshot | null>
+    getRecovery: () => Promise<{ interruptedInput: string } | null>
     newSession: () => Promise<{ sessionId: string }>
     cancel: (taskId: string) => void
     decide: (decision: OperationDecision) => Promise<OperationResult | null>

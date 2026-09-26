@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto"
-import { appendFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs"
+import {
+  appendFileSync,
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import { dirname } from "node:path"
 import type {
   AuditRecord,
@@ -26,6 +34,9 @@ export interface AuditInput {
   planDigest?: string
   policyCode?: TerminalPolicyCode
 }
+
+const MAX_AUDIT_BYTES = 2_000_000
+const RETAIN_AUDIT_BYTES = 1_000_000
 
 export class AuditLogger {
   constructor(private readonly filePath: string) {
@@ -55,7 +66,20 @@ export class AuditLogger {
     }
     appendFileSync(this.filePath, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 })
     chmodSync(this.filePath, 0o600)
+    this.prune()
     return record
+  }
+
+  private prune(): void {
+    if (statSync(this.filePath).size <= MAX_AUDIT_BYTES) return
+    const content = readFileSync(this.filePath)
+    const tail = content.subarray(Math.max(0, content.length - RETAIN_AUDIT_BYTES)).toString("utf8")
+    const boundary = tail.indexOf("\n")
+    const retained = boundary >= 0 ? tail.slice(boundary + 1) : ""
+    const temporary = `${this.filePath}.tmp`
+    writeFileSync(temporary, retained, { encoding: "utf8", mode: 0o600 })
+    chmodSync(temporary, 0o600)
+    renameSync(temporary, this.filePath)
   }
 
   list(limit = 100): AuditRecord[] {

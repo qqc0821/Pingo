@@ -36,7 +36,16 @@ export interface CompletionResult {
   toolCalls: ToolCall[]
 }
 
-export class ModelClient {
+/** Narrow model boundary used by the agent loop and task owner. */
+export interface ModelGateway {
+  completeWithTools(
+    messages: ModelRequestMessage[],
+    toolDefinitions: ToolDefinition[],
+  ): Promise<CompletionResult>
+  cancel(): void
+}
+
+export class ModelClient implements ModelGateway {
   private activeRequest: ActiveRequest | null = null
 
   cancel(): void {

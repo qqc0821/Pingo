@@ -173,12 +173,24 @@ export async function executeTool(
     }
     switch (name) {
       case "list_files":
-        return { content: listFiles(projectPath, args), detail: "正在列出项目文件…" }
+        return {
+          content: listFiles(projectPath, args),
+          detail: "正在列出项目文件…",
+          status: "completed",
+        }
       case "search_files":
-        return { content: searchFiles(projectPath, args), detail: "正在搜索项目文件…" }
+        return {
+          content: searchFiles(projectPath, args),
+          detail: "正在搜索项目文件…",
+          status: "completed",
+        }
       case "read_file": {
         const path = getPathArg(args)
-        return { content: readFile(projectPath, args), detail: `正在读取 ${path}` }
+        return {
+          content: readFile(projectPath, args),
+          detail: `正在读取 ${path}`,
+          status: "completed",
+        }
       }
       default:
         return {

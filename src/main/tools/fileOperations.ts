@@ -91,7 +91,13 @@ export function planFileOperation(
         const currentTarget = resolveProjectTarget(projectPath, requestedPath)
         assertPreconditions(preconditions)
         mkdirSync(currentTarget, { recursive: false })
-        return completedResult(plan, `已创建目录 ${target}`, true, undoId)
+        return completedResult(
+          plan,
+          `已创建目录 ${target}`,
+          true,
+          undoId,
+          verifyPostcondition(() => lstatSync(currentTarget).isDirectory()),
+        )
       },
       undoId,
       undo: async () => rmSync(target, { recursive: false, force: false }),
@@ -173,7 +179,15 @@ export function planFileOperation(
         assertSamePath(target, currentTarget)
         assertPreconditions(preconditions)
         renameSync(currentSource, currentTarget)
-        return completedResult(plan, `已移动 ${source} 到 ${target}`, true, undoId)
+        return completedResult(
+          plan,
+          `已移动 ${source} 到 ${target}`,
+          true,
+          undoId,
+          verifyPostcondition(
+            () => !exists(currentSource) && !lstatSync(currentTarget).isSymbolicLink(),
+          ),
+        )
       },
       undoId,
       undo: async () => {
@@ -218,6 +232,7 @@ export function planFileOperation(
           `已将 ${target} 移入废纸篓`,
           true,
           trashLocation ? undoId : undefined,
+          verifyPostcondition(() => !exists(currentTarget)),
         )
       },
       undoId,
@@ -424,6 +439,7 @@ function completedResult(
   detail: string,
   reversible: boolean,
   undoId?: string,
+  verification: "verified" | "not_checked" = "not_checked",
 ): OperationResult {
   return {
     operationId: plan.operationId,
@@ -432,6 +448,15 @@ function completedResult(
     detail,
     reversible,
     undoId: reversible ? undoId : undefined,
+    verification,
+  }
+}
+
+function verifyPostcondition(check: () => boolean): "verified" | "not_checked" {
+  try {
+    return check() ? "verified" : "not_checked"
+  } catch {
+    return "not_checked"
   }
 }
 

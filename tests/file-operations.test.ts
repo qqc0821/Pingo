@@ -40,6 +40,7 @@ test("structured file operations preview, atomically write, guard races, move, a
   )
   const result = await writeAgain.execute()
   assert.equal(result.status, "completed")
+  assert.equal(result.verification, "not_checked")
   assert.equal(readFileSync(sourcePath, "utf8"), "after\n")
 
   assert.throws(
@@ -74,7 +75,8 @@ test("structured file operations preview, atomically write, guard races, move, a
     },
     digest,
   )
-  await move.execute()
+  const moveResult = await move.execute()
+  assert.equal(moveResult.verification, "verified")
   assert.equal(existsSync(join(root, "moved.txt")), true)
 
   const trash = planFileOperation(
@@ -88,10 +90,11 @@ test("structured file operations preview, atomically write, guard races, move, a
     digest,
   )
   let trashed = ""
-  await trash.execute({
+  const trashResult = await trash.execute({
     trashItem: async (path) => {
       trashed = path
     },
   })
+  assert.equal(trashResult.verification, "not_checked")
   assert.equal(trashed, realpathSync.native(join(root, "moved.txt")))
 })

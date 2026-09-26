@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process"
 import test from "node:test"
 import { AuditLogger } from "../src/main/security/auditLogger.js"
 import { TaskManager } from "../src/main/tasks/taskManager.js"
+import { DESKTOP_EXECUTION_POLICY } from "../src/main/tasks/executionPolicy.js"
 import { SettingsStore } from "../src/main/store.js"
 import type { ChatStreamEvent } from "../src/shared/types.js"
 
@@ -163,7 +164,7 @@ test("desktop auto mode executes project writes without permission or approval e
   const manager = new TaskManager({
     settingsStore: store,
     auditLogger: new AuditLogger(join(root, "audit.jsonl")),
-    skipUserConfirmation: true,
+    executionPolicy: DESKTOP_EXECUTION_POLICY,
   })
   const events: ChatStreamEvent[] = []
   let requestCount = 0
